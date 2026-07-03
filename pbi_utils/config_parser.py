@@ -94,9 +94,20 @@ class TrainingConfig(BaseModel):
         patience_reduce_lr (int): Number of epochs to wait before reducing the learning rate.
         monitor_metric_reduce_lr (Literal["f1", "loss"]): The metric to decide wether the model is performing better or not.
         multiplying_factor_reduce_lr (float): Multiply the learning rate with this after `patience_reduce_lr` epochs without improvement.
+        lr_schedule (Literal["plateau", "cosine", "none"]): Learning rate scheduler to use during training.
+            ``"plateau"`` uses ReduceLROnPlateau (requires a validation set, i.e. k_folds_cv > 1).
+            ``"cosine"`` uses CosineAnnealingLR (works without a validation set).
+            ``"none"`` disables LR scheduling entirely.
         reduce_dimensionality (DIMENSIONALITY_REDUCTION_TECHNIQUE): The dimensionality reduction technique to apply to the merged embeddings. If "none", do not use any.
         n_components_bacteria (int | None): If `reduce_dimensionality` is used, only save this number of components. If None, use them all.
         n_components_phages (int | None): If `reduce_dimensionality` is used, only save this number of components. If None, use them all.
+        test_split_strategy (Literal["random", "phage", "bacteria"]): Strategy for splitting the dataset into train and test sets when ``do_test=True`` and no ``test_dataset_path`` is provided.
+            ``"random"`` performs a random shuffle split (default behaviour).
+            ``"phage"`` holds out ``n_holdout_test`` random phage IDs for testing.
+            ``"bacteria"`` holds out ``n_holdout_test`` random bacteria IDs for testing.
+        test_dataset_path (str | None): Path to a separate CSV file to use as the test set. When provided, ``test_split_strategy`` is ignored and this file is loaded directly.
+        test_size (float): Fraction of the dataset to reserve for testing when ``test_split_strategy="random"``.
+        n_holdout_test (int | None): Number of unique phage/bacteria IDs to hold out when ``test_split_strategy`` is ``"phage"`` or ``"bacteria"``.
     """
 
     do_train: bool = True
@@ -117,9 +128,16 @@ class TrainingConfig(BaseModel):
     monitor_metric_reduce_lr: Literal["f1", "loss"] = "f1"
     multiplying_factor_reduce_lr: float = 0.5
 
+    lr_schedule: Literal["plateau", "cosine", "none"] = "plateau"
+
     reduce_dimensionality: DIMENSIONALITY_REDUCTION_TECHNIQUE = "none"
     n_components_bacteria: int | None = None
     n_components_phages: int | None = None
+
+    test_split_strategy: Literal["random", "phage", "bacteria"] = "random"
+    test_dataset_path: str | None = None
+    test_size: float = 0.2
+    n_holdout_test: int | None = None
 
 
 class YAMLConfig(BaseModel):

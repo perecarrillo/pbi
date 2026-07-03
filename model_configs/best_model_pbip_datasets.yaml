@@ -5,7 +5,7 @@ input_perphect:
 
 embeddings_dir: data/embeddings-pbip
 output_dir: output/pbip/test
-num_gpu: 1
+num_gpu: 0
 gpu_id: 0
 
 training_config:
@@ -16,8 +16,14 @@ training_config:
 
   training_noise_std: 0.05
 
+  lr_schedule: cosine  # Options: plateau, cosine, none
+
   stratify_cv: true
   k_folds_cv: 10
+
+  # test_split_strategy: random  # Options: random, phage, bacteria
+  test_dataset_path: data/perphect-data/predphi/predphi_test_dataset.csv
+  test_size: 0.2
 
 phages_embedding_models:
   - name: NT2

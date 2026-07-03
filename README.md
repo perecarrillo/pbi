@@ -37,12 +37,22 @@ pbi/
 ├── data/ # This folder is not included in the repository. You should create it and add all the data inside.
 ├── doc/ # Extra documentation for developers, showing the specific details for all the code.
 ├── finetune_nt2.py # Finetuning script for the Nucleotide Transformer v2. See `run_finetune_nt2.sh` file for an example, or run `python finetune_nt2.py --help` to see all the possible parameters.
-├── main.py # Main entrypoint for the framework. See the <Execution> section.
+├── main.py # Main entrypoint for the framework. Parses arguments and delegates to pipeline/.
 ├── model_configs/ # YAML configuration files provided as an example. They are used to define all the parameters for each run.
 │   ├── example.yaml # Example config with details on all the possible parameters.
 │   ├── base.yaml # Basic execution config to use as test.
 │   ├── best_model_pbip_datasets.yaml # Configuration of the best model found during the project for the PredPHI data.
 │   └── best_model.yaml # Best configuration found during the project for the CI4CB data.
+├── pipeline/ # Modular pipeline components. Each module handles one stage of the pipeline.
+│   ├── __init__.py # Re-exports run_full_pipeline and run_embed_only.
+│   ├── embedding.py # Creates the embeddings for bacteria and phages.
+│   ├── data.py # Dataset construction: make_dataset, dataframe_to_tf_dataloader, etc.
+│   ├── dimensionality.py # PCA: fit_pca, transform_pca, reduce_dimensionality.
+│   ├── training.py # train_model, train_nn_model, kfold_train, LR scheduler factory.
+│   ├── evaluation.py # test_model, compute_metrics.
+│   ├── split.py # Configurable train/test split strategies.
+│   ├── stats.py # Stats class for logging run results to TSV.
+│   └── orchestrator.py # Top-level run_full_pipeline() and run_embed_only().
 ├── pbi_models/ # Implementation of the different classifiers and embedding models.
 │   ├── classifiers/ # Classifiers implementation.
 │   │   ├── abstract_classifier.py # Abstract classifier class. All the others should inherit from this class, to provide a stable API.
@@ -69,7 +79,7 @@ pbi/
 │   ├── data_manager.py # Responsible of dealing with reading and storing the DNA data and embeddings.
 │   ├── logging.py # Logging system implementation used for the project.
 │   ├── types.py # Defines some types that are used in multiple files.
-│   └── utils.py # Provides extra utility functions and classes, such a Stats class.
+│   └── utils.py # Provides extra utility functions (e.g. clean_gpu).
 ├── requirements.txt # Base requirements file.
 ├── requirements_nt2_finetuning.txt # Requirements file for finetuning the Nucleotide Transformer v2.
 ├── run.sh # Basic execution example.
@@ -155,6 +165,16 @@ This will compute the embeddings for all the sequences (or use the cached ones i
 > [!NOTE]
 > If you are computing the embeddings from scratch with a merging strategy different than [*TruncateStrategy*, *BottomTruncateStrategy* or *TopBottomTruncateStrategy*], it will take multiple hours to finish.
 
+### Pre-computing embeddings only
+
+If you are using multiple environments (e.g. DNABERT2 requires its own conda environment), you can compute only the embeddings without running training:
+
+```bash
+python main.py -c model_configs/base.yaml --embed-only
+```
+
+This is especially useful for pre-computing expensive embeddings in the correct environment (e.g. `pbi-dnabert`) and then running the full training in the base environment where all models have `use_cached_embeddings: true`.
+
 If you are using DNABERT2 as embedding model, make sure to run the execution in the `pbi-dnabert` environment. If you are using a finetuned Nucleotide Transformer v2 model, run it in the `pbi-finetune` environment.
 > [!NOTE]
 > The DNABERT2 model has high GPU VRAM needs, and must be run on higher-end GPUs, such as NVIDIA A40.
@@ -162,6 +182,25 @@ If you are using DNABERT2 as embedding model, make sure to run the execution in 
 We strongly recommend computing first all the embeddings for all the models that you want to use separatedly, by executing multiple times the framework with only one embedding model at a time (and with the correct environment activated), as they will be cached and the future training will be much smoother.
 > [!NOTE]
 > The embeddings are cached for each combination of model + merging strategy, so if you change any of them, they will need to be recomputed.
+
+### Configuring the test split
+
+The `training_config.test_split_strategy` option controls how the test set is created:
+
+| Strategy | Description | Required extra field |
+|---|---|---|
+| `random` (default) | Random shuffle split | `test_size` (fraction, default 0.2) |
+| `phage` | Hold out N random phage IDs | `n_holdout_test` (integer) |
+| `bacteria` | Hold out N random bacteria IDs | `n_holdout_test` (integer) |
+
+Alternatively, set `test_dataset_path` to a separate CSV file (e.g. a predefined benchmark test split). When set, the split strategy is ignored and PCA (if enabled) is correctly fitted on the training set only and then applied to the test file.
+
+### Configuring the LR scheduler
+
+Set `training_config.lr_schedule` to one of:
+- `plateau` (default): `ReduceLROnPlateau`, requires a validation set (`k_folds_cv >= 2`).
+- `cosine`: `CosineAnnealingLR`, decays from `learning_rate` to `1e-6` over `epochs` steps. Works without a validation set (`k_folds_cv: 1`).
+- `none`: No LR scheduling.
 
 To run the best model found during the project, assuming that all the required embeddings have already been computed, just execute:
 ```bash

@@ -1,72 +1,156 @@
 # Example configuration file for training and evaluating a PBI model.
 # You can use this file as a template to create your own configuration files.
-# Remember to only use one of the multiple options provided for some parameters (meaning, no repeated keys). If not, only the last one will be considered.
+# Remember to only use one of the multiple options provided for some parameters
+# (i.e. no repeated keys, only the last one is considered by YAML parsers).
 
-input_perphect: path/to/perphect/data # Basic way to specify the input data. /path/to/perphect/data must contain at least 3 files, bacteria_df.csv, phages_df.csv and couples_df.csv.
-input_perphect: # More explicit way to specify the input data files.
-  bacteria_df: /path/to/perphect/data/bacteria_df.csv # Path to the bacteria dataframe CSV file. It must contain at least two columns: 'bacterium_id' and 'bacterium_sequence'.
-  phages_df: /path/to/perphect/data/phages_df.csv # Path to the phages dataframe CSV file. It must contain at least two columns: 'phage_id' and 'phage_sequence'.
-  couples_df: /path/to/perphect/data/couples_df.csv # Path to the couples dataframe CSV file. It must contain at least 3 columns: 'bacterium_id', 'phage_id' and 'interaction_type' (1 if there is an interaction, 0 otherwise).
+# ---------------------------------------------------------------------------
+# Input data
+# ---------------------------------------------------------------------------
 
-embeddings_dir: data/embeddings # Directory to store/load the computed embeddings. Default is 'data/embeddings'.
-output_dir: output/example_model/ # Directory to store the output results of the model or null if no output is desired. Default is null.
+input_perphect: path/to/perphect/data
+# Basic shorthand: /path/to/perphect/data must contain bacteria_df.csv,
+# phages_df.csv and couples_df.csv.
 
-num_gpu: 0 # Use GPU (1) or CPU (0). Default is 0.
-gpu_id: 0 # ID of the GPU to use if num_gpu == 1.
+input_perphect: # More explicit form, specify each file individually.
+  bacteria_df: /path/to/perphect/data/bacteria_df.csv # Columns: 'bacterium_id', 'bacterium_sequence'
+  phages_df: /path/to/perphect/data/phages_df.csv     # Columns: 'phage_id', 'phage_sequence'
+  couples_df: /path/to/perphect/data/couples_df.csv   # Columns: 'bacterium_id', 'phage_id', 'interaction_type'
 
-torch_num_threads: -1 # Number of threads to use for PyTorch operations. Default is -1 (use all available threads).
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+embeddings_dir: data/embeddings   # Where embeddings are stored/loaded. Default: 'data/embeddings'.
+output_dir: output/example_model/ # Where results are saved. Set to null to skip saving.
+
+# ---------------------------------------------------------------------------
+# Hardware
+# ---------------------------------------------------------------------------
+
+num_gpu: 0          # 1 = use GPU, 0 = CPU only. Default: 0.
+gpu_id: 0           # GPU index when num_gpu=1.
+torch_num_threads: -1 # PyTorch thread count. -1 = let PyTorch decide. Default: -1.
+
+# ---------------------------------------------------------------------------
+# Training configuration
+# ---------------------------------------------------------------------------
 
 training_config:
-  do_train: true # Whether to train the model. If false, only compute the embeddings and exit. Default is true.
-  do_test: true # Whether to test the model after training. If false, use all dataset to train the model, do not evaluate the model on the test set and exit after training. Default is true.
-  epochs: 10 # Number of training epochs. Default is 10.
-  learning_rate: 1e-3 # Learning rate for the optimizer. Default is 1e-3.
-  weight_decay: 1e-4 # Weight decay (L2 regularization) for the optimizer. Default is 1e-4.
-  batch_size: 128 # Batch size for training. Default is 128.
+  do_train: true  # If false, only compute embeddings and exit. Default: true.
+  do_test: true   # If false, train on the full dataset and skip evaluation. Default: true.
 
-  training_noise_std: 0.05 # STD of the noise that is added during training to the embeddings. If 0, do not add noise. Default is 0.05. Adding noise can help to regularize the model and improve its generalization, but it can also make training more difficult.
+  epochs: 10          # Training epochs. Default: 10.
+  learning_rate: 1e-3 # Adam learning rate. Default: 1e-3.
+  weight_decay: 1e-4  # Adam L2 regularisation. Default: 1e-4.
+  batch_size: 128     # Batch size (train & test). Default: 128.
 
-  reduce_dimensionality: "none" # The dimensionality reduction technique to apply to the merged embeddings. If "none", do not use any. Can be either "none" or PCA. Default is "none".
-  n_components_bacteria: null # Number of components to keep when reducing the dimensionality of bacteria embeddings. Only used if reduce_dimensionality is not "none". Default is null (keep all components).
-  n_components_phages: null # Number of components to keep when reducing the dimensionality of phage embeddings. Only used if reduce_dimensionality is not "none". Default is null (keep all components).
+  training_noise_std: 0.05
+  # Gaussian noise added to embeddings during training for regularisation.
+  # Set to 0 to disable. Default: 0.05.
 
-  stratify_cv: false # Whether to stratify the folds in cross validation. If true, each fold will contain all the interactions for an exclusive subset of all the phages. If false, the folds will be created randomly on the interactions level. Default is false.
-  k_folds_cv: 3 # Number of folds for k-fold cross-validation. Default is 3. Must be >= 2.
+  # -------------------------------------------------------------------------
+  # Learning rate scheduling
+  # -------------------------------------------------------------------------
 
-  patience_early_stopping: 1000 # Number of epochs with no improvement after which training will be stopped. Default is 1000. To disable early stopping, set this to a very high value.
-  monitor_metric_early_stopping: f1 # Metric to monitor for early stopping. Can be either "f1" or "loss". Default is "f1".
+  lr_schedule: plateau
+  # LR scheduler to use. Options:
+  #   "plateau": ReduceLROnPlateau: reduces LR when validation metric stops
+  #              improving. Requires k_folds_cv >= 2 (needs a validation set).
+  #   "cosine":  CosineAnnealingLR: decays LR from learning_rate to 1e-6
+  #              over `epochs` steps. Works without a validation set.
+  #   "none":    No LR scheduling.
+  # Default:     "plateau".
 
-  patience_reduce_lr: 1000 # Number of epochs with no improvement after which learning rate will be reduced. Default is 1000. To disable learning rate reduction, set this to a very high value.
-  monitor_metric_reduce_lr: f1 # Metric to monitor for learning rate reduction. Can be either "f1" or "loss". Default is "f1".
-  multiplying_factor_reduce_lr: 0.5 # Factor by which the learning rate will be reduced. Default is 0.5.
+  patience_reduce_lr: 1000           # Epochs without improvement before LR is reduced ("plateau" only). Default: 1000.
+  monitor_metric_reduce_lr: f1       # Metric to watch: "f1" or "loss" ("plateau" only). Default: "f1".
+  multiplying_factor_reduce_lr: 0.5  # LR reduction factor ("plateau" only). Default: 0.5.
 
-phages_embedding_models: # List of embedding models to use for phage sequences. You can specify multiple models to combine their embeddings.
-# name (str): Name of the embedding model to use. Must be a subclass of `AbstractModel`, implemented in `pbi_models.embedders`.
-# params (Dict[str, Any]): Specific parameters to initialize the embedding model. They are passed as keyword arguments to the model constructor.
-# strategy (StrategyConfig | str): Merging strategy to use when multiple embeddings are generated by this model. If a string, use the default parameters for that strategy. Can be either one string or a parameter with the following format:
-#   name (str): Name of the merging strategy to use. Must be a subclass of `AbstractMergerStrategy`, implemented in `pbi_utils.embeddings_merging_strategies`.
-#   params (Dict[str, Any]): Specific parameters to initialize the merging strategy. They are passed as keyword arguments to the strategy constructor.
-# use_cached_embeddings (CACHED_EMBEDDINGS_OPTION): If true, do not calculate embeddings for this model, use cached ones from `embeddings_dir`. Also, if true, the embedding models will not be loaded, saving time and possible environment problems. If "auto", use cached embeddings if they exist, otherwise compute them. Default is auto.
+  # -------------------------------------------------------------------------
+  # Early stopping
+  # -------------------------------------------------------------------------
 
-# Examples:
-  - name: NT2 # Nucleotide Transformer 2 model
+  patience_early_stopping: 1000         # Epochs without improvement before stopping. Default: 1000.
+  monitor_metric_early_stopping: f1     # Metric to watch: "f1" or "loss". Default: "f1".
+
+  # -------------------------------------------------------------------------
+  # Dimensionality reduction
+  # -------------------------------------------------------------------------
+
+  reduce_dimensionality: "none"
+  # Technique applied to merged embeddings before training. Options: "none", "PCA".
+  # Default: "none".
+  n_components_bacteria: null # PCA components for bacteria. null = keep all. Default: null.
+  n_components_phages: null   # PCA components for phages. null = keep all. Default: null.
+
+  # -------------------------------------------------------------------------
+  # Cross-validation
+  # -------------------------------------------------------------------------
+
+  k_folds_cv: 3      # K-fold CV folds. Must be >= 2. Set to 1 for no CV. Default: 3.
+  stratify_cv: false
+  # If true, each fold holds out an exclusive subset of phage IDs (ensures
+  # the validation set contains only unseen phages). Default: false.
+
+  # -------------------------------------------------------------------------
+  # Test set configuration
+  # -------------------------------------------------------------------------
+
+  test_split_strategy: random
+  # How to create the test set when do_test=true and test_dataset_path is not set.
+  # Options:
+  #   "random":    random shuffle split (uses test_size). Default.
+  #   "phage":     hold out n_holdout_test random phage IDs.
+  #   "bacteria":  hold out n_holdout_test random bacteria IDs.
+
+  test_size: 0.2          # Test fraction when test_split_strategy="random". Default: 0.2.
+  n_holdout_test: null    # Organism IDs to hold out when strategy is "phage"/"bacteria". Default: null.
+
+  test_dataset_path: null
+  # Path to a separate CSV test file (e.g. predphi_test_dataset.csv).
+  # When set, test_split_strategy is ignored and this file is used directly.
+  # The PCA (if enabled) is fitted on the training set and applied to this file.
+  # Default: null (use split strategy).
+
+# ---------------------------------------------------------------------------
+# Phage embedding models
+# ---------------------------------------------------------------------------
+
+phages_embedding_models:
+  # List of models to embed phage sequences. Multiple models have their
+  # embeddings concatenated into one final embedding.
+  #
+  # Fields per model:
+  #   name (str): Class name in pbi_models.embedders (e.g. NT2, MegaDNA, DNABERT2).
+  #   params (dict): Constructor kwargs for the model.
+  #   strategy (str | dict): Merging strategy for multiple sub-embeddings per sequence.
+  #     String shorthand (default params):  strategy: TruncateStrategy
+  #     Explicit form:
+  #       strategy:
+  #         name: TKPertStrategy
+  #         params: {J: 16, gamma: 20, merging_strategy: concat}
+  #   use_cached_embeddings: auto | true | false
+  #     true:   always load from cache, never recompute (model is not loaded).
+  #     false:  always recompute, overwrite cache.
+  #     auto:   load from cache if available, otherwise compute and cache.
+
+  - name: NT2
     params:
-      model_name: nucleotide-transformer-v2-250m-multi-species # Model name or path to the pretrained weights.
+      model_name: nucleotide-transformer-v2-250m-multi-species
     strategy: TopBottomTruncateStrategy
     use_cached_embeddings: auto
 
   - name: MegaDNA
-    params: 
-      weights_path: data/weights/megaDNA_phage_145M.pt # Automatically downloaded if not set
+    params:
+      weights_path: data/weights/megaDNA_phage_145M.pt # Auto-downloaded if omitted.
       get_layer: concat
     strategy: MaxStrategy
     use_cached_embeddings: auto
 
   - name: DNABERT2
-    params: 
-      source_code_path: foundation-models-test/DNABERT-2/DNABERT-2-117M/
+    params:
+      source_code_path: DNABERT-2-117M/
       max_seq_len: 32768
-    strategy: 
+    strategy:
       name: TKPertStrategy
       params:
         J: 16
@@ -74,38 +158,44 @@ phages_embedding_models: # List of embedding models to use for phage sequences. 
         merging_strategy: concat
     use_cached_embeddings: auto
 
-bacteria_embedding_models: # List of embedding models to use for bacteria sequences. You can specify multiple models to combine their embeddings.
-# Same format as phages_embedding_models.
+# ---------------------------------------------------------------------------
+# Bacteria embedding models
+# ---------------------------------------------------------------------------
 
-# Examples:
+bacteria_embedding_models:
+  # Same format as phages_embedding_models.
+
   - name: NT2
-    params: 
+    params:
       model_name: nucleotide-transformer-v2-250m-multi-species
     strategy: TopBottomTruncateStrategy
     use_cached_embeddings: true
 
   - name: MegaDNA
-    params: 
+    params:
       weights_path: data/weights/megaDNA_phage_145M.pt
       get_layer: concat
     strategy: BottomTruncateStrategy
     use_cached_embeddings: true
 
   - name: DNABERT2
-    params: 
-      source_code_path: foundation-models-test/DNABERT-2/DNABERT-2-117M/
+    params:
+      source_code_path: DNABERT-2-117M/
       max_seq_len: 32768
     strategy: TopBottomTruncateStrategy
     use_cached_embeddings: true
 
+# ---------------------------------------------------------------------------
+# Classifier
+# ---------------------------------------------------------------------------
 
-# Classifier configuration: 
-# Attributes:
-# name (str): Name of the classifier model to use. Must be a subclass of `AbstractClassifier`, implemented in `pbi_models.classifiers`.
-# params (Dict[str, Any]): Specific parameters to initialize the classifier model. They are passed as keyword arguments to the model constructor. To see the available parameters for each classifier, check their implementation in the `pbi_models.classifiers` module.
+# Fields:
+#   name (str): Class name in pbi_models.classifiers.
+#   params (dict): Constructor kwargs (excluding bacterium_embed_dim / phage_embed_dim,
+#                  which are inferred automatically from the embedding dimensions).
 
-# Examples: 
-classifier: 
+# Example: two-branch MLP:
+classifier:
   name: MLPClassifier
   params:
     bacterium_mlp_sizes: [64]
@@ -113,27 +203,24 @@ classifier:
     dense_dim: 100
     dropout: 0.2
 
-classifier: 
+# Example: single-branch MLP:
+classifier:
   name: BasicMLPClassifier
   params:
     mlp_params: [256, 128]
     dropout: 0.4
 
+# Example: linear classifier (no params):
 classifier:
   name: LinearClassifier
 
+# Example: sklearn / LightGBM / XGBoost:
 classifier:
   name: SklearnClassifier
   params:
     sklearn_model_name: RandomForestClassifier
     sklearn_model_params:
       n_estimators: 200
-      max_features: null
-      max_leaves: 63
-      grow_policy: depthwise
-      booster: gbtree
-      tree_method: hist
-      verbosity: 1
       n_jobs: -1
 
 classifier:

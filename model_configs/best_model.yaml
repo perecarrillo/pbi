@@ -4,7 +4,7 @@ input_perphect:
   couples_df: data/perphect-data/all-private-oversampled/couples_df.csv
 embeddings_dir: data/embeddings
 output_dir: output/test/
-num_gpu: 1
+num_gpu: 0
 gpu_id: 0
 
 training_config:
@@ -15,12 +15,17 @@ training_config:
 
   training_noise_std: 0.05
 
+  lr_schedule: plateau  # Options: plateau, cosine, none
+
   reduce_dimensionality: PCA
   n_components_bacteria: 500
   n_components_phages: 500
 
   stratify_cv: false
   k_folds_cv: 10
+
+  test_split_strategy: random  # Options: random, phage, bacteria
+  test_size: 0.2
 
 phages_embedding_models:
   - name: NT2
