@@ -1,6 +1,6 @@
 import yaml
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Literal, Tuple
+from pydantic import BaseModel, Field, model_validator
+from typing import List, Dict, Any, Literal, Tuple, Union
 from pbi_models.classifiers.sklearn_classifier import SklearnClassifier
 from pbi_utils.embeddings_merging_strategies import *
 from pbi_models.embedders import *
@@ -101,13 +101,15 @@ class TrainingConfig(BaseModel):
         reduce_dimensionality (DIMENSIONALITY_REDUCTION_TECHNIQUE): The dimensionality reduction technique to apply to the merged embeddings. If "none", do not use any.
         n_components_bacteria (int | None): If `reduce_dimensionality` is used, only save this number of components. If None, use them all.
         n_components_phages (int | None): If `reduce_dimensionality` is used, only save this number of components. If None, use them all.
-        test_split_strategy (Literal["random", "phage", "bacteria"]): Strategy for splitting the dataset into train and test sets when ``do_test=True`` and no ``test_dataset_path`` is provided.
+        test_split_strategy (Literal["random", "phage", "bacteria", "organism", "predefined"]): Strategy for splitting the dataset into train and test sets when ``do_test=True``.
             ``"random"`` performs a random shuffle split (default behaviour).
             ``"phage"`` holds out ``n_holdout_test`` random phage IDs for testing.
             ``"bacteria"`` holds out ``n_holdout_test`` random bacteria IDs for testing.
-        test_dataset_path (str | None): Path to a separate CSV file to use as the test set. When provided, ``test_split_strategy`` is ignored and this file is loaded directly.
+            ``"organism"`` holds out ``n_holdout_test`` phages AND all their associated bacteria for testing.
+            ``"predefined"`` loads a separate CSV file specified by ``test_dataset_path`` as the test set.
+        test_dataset_path (str | None): Path to a separate CSV file to use as the test set. Required when ``test_split_strategy="predefined"``.
         test_size (float): Fraction of the dataset to reserve for testing when ``test_split_strategy="random"``.
-        n_holdout_test (int | None): Number of unique phage/bacteria IDs to hold out when ``test_split_strategy`` is ``"phage"`` or ``"bacteria"``.
+        n_holdout_test (int | None): Number of unique phage/bacteria IDs to hold out when ``test_split_strategy`` is ``"phage"``, ``"bacteria"``, or ``"organism"``.
     """
 
     do_train: bool = True
@@ -134,7 +136,7 @@ class TrainingConfig(BaseModel):
     n_components_bacteria: int | None = None
     n_components_phages: int | None = None
 
-    test_split_strategy: Literal["random", "phage", "bacteria"] = "random"
+    test_split_strategy: Literal["random", "phage", "bacteria", "organism", "predefined"] = "random"
     test_dataset_path: str | None = None
     test_size: float = 0.2
     n_holdout_test: int | None = None
@@ -155,6 +157,10 @@ class YAMLConfig(BaseModel):
         torch_num_threads (int): Number of threads used by PyTorch. Default is -1, which lets PyTorch decide.
         training_config (TrainingConfig): Configuration for training parameters.
         output_dir (str | None): Output folder. If None, no output folder is used. Default is None.
+        seed (int): Base random seed for reproducibility. Each ensemble member i uses seed + i. Default is 42.
+        ensemble_size (int): Number of independently-seeded models to train. When > 1, softmax probabilities are averaged at test time. Default is 1 (Single model).
+        pca_components (int | str): Shorthand for PCA dimensionality reduction. When set to an integer N, sets both n_components_bacteria and n_components_phages to N and enables PCA. Default is "none".
+        calibrate_threshold (bool): When True, performs a post-hoc threshold sweep on a held-out calibration set (split from training data) to maximise F1, then retrains on the full training set. Default is False.
     """
 
     input_perphect: str | InputConfig
@@ -169,6 +175,10 @@ class YAMLConfig(BaseModel):
     torch_num_threads: int = -1
     training_config: TrainingConfig = Field(default_factory=TrainingConfig)
     output_dir: str | None = None
+    seed: int = 42
+    ensemble_size: int = 1
+    pca_components: Union[int, str] = "none"
+    calibrate_threshold: bool = False
 
 
 class Config:
@@ -188,6 +198,9 @@ class Config:
         classifier_params (Dict[str, Any]): Parameters for initializing the classifier model.
         torch_num_threads (int): Number of threads used by PyTorch.
         output_dir (str | None): Output folder path.
+        seed (int): Base random seed. Each ensemble member i uses seed + i.
+        ensemble_size (int): Number of independently-seeded models to train (ensemble).
+        calibrate_threshold (bool): Whether to perform post-hoc threshold calibration.
     """
 
     def __init__(self, yaml_config: YAMLConfig, raw_dict):
@@ -217,6 +230,31 @@ class Config:
         self.classifier_params = yaml_config.classifier.params
         self.torch_num_threads = yaml_config.torch_num_threads
         self.output_dir = yaml_config.output_dir
+
+        self.seed = yaml_config.seed
+        self.ensemble_size = yaml_config.ensemble_size
+        self.calibrate_threshold = yaml_config.calibrate_threshold
+
+        # When pca_components set to an integer, override both PCA component counts and enable PCA dimensionality reduction.
+        if yaml_config.pca_components != "none":
+            n = int(yaml_config.pca_components)
+            self.training_config.n_components_bacteria = n
+            self.training_config.n_components_phages = n
+            self.training_config.reduce_dimensionality = "PCA"
+
+        tc = self.training_config
+        if tc.test_split_strategy == "predefined" and tc.test_dataset_path is None:
+            raise ValueError(
+                "test_split_strategy='predefined' requires test_dataset_path to be set."
+            )
+
+        # Too many combinations
+        if self.ensemble_size > 1 and tc.k_folds_cv > 1:
+            logger.warning(
+                f"ensemble_size={self.ensemble_size} with k_folds_cv={tc.k_folds_cv} "
+                f"will train {self.ensemble_size * tc.k_folds_cv} models total. "
+                "Each fold trains the full ensemble and evaluates it as one unit."
+            )
 
     def _parse_models(
         self, models_config: List[ModelConfig]
@@ -256,6 +294,8 @@ class Config:
         return (
             f"Config(input_perphect={self.input_perphect}, embeddings_dir={self.embeddings_dir}, "
             f"num_gpu={self.num_gpu}, gpu_id={self.gpu_id}, "
+            f"seed={self.seed}, ensemble_size={self.ensemble_size}, "
+            f"calibrate_threshold={self.calibrate_threshold}, "
             f"training_config=TrainingConfig({self.training_config}), "
             f"phages_embedding_models={self.phages_embedding_models}, "
             f"compute_phages_embeddings={self.compute_phages_embeddings}, "

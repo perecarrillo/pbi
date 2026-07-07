@@ -23,9 +23,9 @@ class Stats:
     """
     Accumulate training and testing statistics for a single pipeline run.
 
-    Call :meth:`update_classifier`, :meth:`update_train_results`, and
-    :meth:`update_test_results` as the pipeline progresses, then call
-    :meth:`log` to serialise the results.
+    Call :meth:`update_classifier`, :meth:`update_ensemble_info`,
+    :meth:`update_train_results`, and :meth:`update_test_results` as the
+    pipeline progresses, then call :meth:`log` to serialise the results.
     """
 
     def __init__(self, config) -> None:
@@ -41,6 +41,12 @@ class Stats:
         self.train_time: float | None = None
         self.test_time: float | None = None
 
+        self.ensemble_size: int = getattr(config, "ensemble_size", 1)
+        self.seed: int = getattr(config, "seed", 42)
+        self.split_strategy: str = config.training_config.test_split_strategy
+        self.threshold: float = 0.5
+        self.calibrated_threshold: float | None = None
+
     def update_test_results(self, cm: np.ndarray, test_time: float) -> None:
         """Record the test confusion matrix and elapsed test time (seconds)."""
         self.test_cm = cm
@@ -54,6 +60,21 @@ class Stats:
     def update_classifier(self, classifier: nn.Module) -> None:
         """Record the instantiated classifier for name-based logging."""
         self.classifier = classifier
+
+    def update_ensemble_info(
+        self,
+        ensemble_size: int,
+        seed: int,
+        split_strategy: str,
+        threshold: float,
+        calibrated_threshold: float | None,
+    ) -> None:
+        """Record ensemble and threshold metadata."""
+        self.ensemble_size = ensemble_size
+        self.seed = seed
+        self.split_strategy = split_strategy
+        self.threshold = threshold
+        self.calibrated_threshold = calibrated_threshold
 
     def log(self, write_fn: Callable[[str], None]) -> None:
         """
@@ -73,7 +94,24 @@ class Stats:
         ]
 
         def _fmt(value: float | None) -> str:
-            return f"{value:.2f}".replace(".", ",") if value is not None else ""
+            return f"{value:.4f}".replace(".", ",") if value is not None else ""
+
+        def _cm_metrics(cm: np.ndarray | None):
+            """Return (acc, rec, f1) strings from a confusion matrix, or empty strings."""
+            if cm is None:
+                return "", "", ""
+            tn, fp, fn, tp = (
+                float(cm[0][0]), float(cm[0][1]),
+                float(cm[1][0]), float(cm[1][1]),
+            )
+            denom_acc = tp + tn + fp + fn
+            acc = (tp + tn) / denom_acc if denom_acc > 0 else 0.0
+            rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0.0
+            return _fmt(acc), _fmt(rec), _fmt(f1)
+
+        train_acc, train_rec, train_f1 = _cm_metrics(self.train_cm)
+        test_acc, test_rec, test_f1 = _cm_metrics(self.test_cm)
 
         data = [
             datetime.datetime.now().strftime("%d/%m/%YT%H:%M:%S"),
@@ -85,21 +123,27 @@ class Stats:
             str(self.config.training_config.epochs),
             str(self.config.training_config.batch_size),
             f"{self.config.training_config.learning_rate:.4e}".replace(".", ","),
+            str(self.ensemble_size),
+            self.split_strategy,
+            f"{self.threshold:.2f}".replace(".", ","),
             _fmt(self.train_time),
             # Train confusion matrix: TP, FP, FN, TN
             _fmt(self.train_cm[1][1] if self.train_cm is not None else None),
             _fmt(self.train_cm[0][1] if self.train_cm is not None else None),
             _fmt(self.train_cm[1][0] if self.train_cm is not None else None),
             _fmt(self.train_cm[0][0] if self.train_cm is not None else None),
-            "",  # Train Accuracy (computed separately if needed)
-            "",  # Train Weighted accuracy
-            "",  # Train F1 Score
+            train_acc,
+            train_rec,
+            train_f1,
             _fmt(self.test_time),
             # Test confusion matrix: TP, FP, FN, TN
             _fmt(self.test_cm[1][1] if self.test_cm is not None else None),
             _fmt(self.test_cm[0][1] if self.test_cm is not None else None),
             _fmt(self.test_cm[1][0] if self.test_cm is not None else None),
             _fmt(self.test_cm[0][0] if self.test_cm is not None else None),
+            test_acc,
+            test_rec,
+            test_f1,
         ]
 
         write_fn("\n" + "\t".join(data))

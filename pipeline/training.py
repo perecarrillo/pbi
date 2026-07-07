@@ -24,7 +24,7 @@ from pbi_models.classifiers.sklearn_classifier import SklearnClassifier
 from pbi_utils.config_parser import TrainingConfig
 from pbi_utils.logging import Logging
 from pipeline.data import dataframe_to_tf_dataloader, dataframe_to_numpy_X_y
-from pipeline.evaluation import test_model, compute_metrics
+from pipeline.evaluation import test_model, test_nn_ensemble, compute_metrics
 
 logger = Logging()
 
@@ -395,3 +395,131 @@ def kfold_train(
     )
 
     return mean_cm
+
+
+def kfold_train_ensemble(
+    df: pd.DataFrame,
+    config,
+    bacterium_embed_size: int,
+    phage_embed_size: int,
+) -> list[nn.Module]:
+    """
+    Perform K-Fold Cross Validation where each fold trains the full ensemble.
+
+    For each fold:
+
+    1. Train ``config.ensemble_size`` independently-seeded models on the fold's
+       training subset.
+    2. Evaluate the ensemble (averaged softmax) on the validation fold.
+    3. Record the fold's confusion matrix.
+
+    After all folds, retrain the final ensemble on 100% of *df*.
+
+    :param df: Full dataset DataFrame.
+    :param config: :class:`~pbi_utils.config_parser.Config` object (carries
+        ``ensemble_size``, ``seed``, ``classifier``, ``classifier_params``,
+        ``training_config``, ``device``).
+    :param bacterium_embed_size: Input dimensionality for the bacterium branch.
+    :param phage_embed_size: Input dimensionality for the phage branch.
+    :return: List of ``nn.Module`` models retrained on the full dataset.
+    """
+    import torch
+    import numpy as np
+
+    tc = config.training_config
+
+    if tc.stratify_cv:
+        splitter = StratifiedGroupKFold(n_splits=tc.k_folds_cv)
+        groups = df["phage_id"].values
+        y = df["interaction_type"].values
+        splits = list(splitter.split(df, y=y, groups=groups))
+    else:
+        kfold = KFold(n_splits=tc.k_folds_cv, shuffle=True, random_state=config.seed)
+        splits = list(kfold.split(df))
+
+    all_conf_matrices = []
+    logger.info(
+        f"Starting {tc.k_folds_cv}-Fold CV with ensemble_size={config.ensemble_size}..."
+    )
+
+    for fold, (train_idx, val_idx) in enumerate(splits):
+        logger.debug(f"Ensemble fold {fold + 1}/{tc.k_folds_cv}...")
+        train_fold_df = df.iloc[train_idx].reset_index(drop=True)
+        val_fold_df = df.iloc[val_idx].reset_index(drop=True)
+
+        num_neg = (train_fold_df["interaction_type"] == 0).sum()
+        num_pos = (train_fold_df["interaction_type"] == 1).sum()
+        curr_pos_weight = num_neg / num_pos if num_pos > 0 else 1.0
+
+        # Train the full ensemble on this fold's training subset
+        fold_ensemble: list[nn.Module] = []
+        for i in range(config.ensemble_size):
+            member_seed = config.seed + fold * config.ensemble_size + i
+            torch.manual_seed(member_seed)
+            np.random.seed(member_seed)
+            model_i = config.classifier(
+                bacterium_embed_size, phage_embed_size, **config.classifier_params
+            )
+            train_model(
+                train_df=train_fold_df,
+                model=model_i,
+                training_config=tc,
+                device=config.device,
+                val_df=val_fold_df,
+                verbose=1,
+                progressbar_description=(
+                    f"Fold {fold + 1}/{tc.k_folds_cv} — "
+                    f"Member {i + 1}/{config.ensemble_size}"
+                ),
+                pos_weight=curr_pos_weight,
+            )
+            fold_ensemble.append(model_i)
+
+        # Evaluate ensemble as a unit on the validation fold
+        cm_mat, _ = test_nn_ensemble(
+            test_df=val_fold_df,
+            ensemble=fold_ensemble,
+            batch_size=tc.batch_size,
+            device=config.device,
+            silent=True,
+        )
+        all_conf_matrices.append(cm_mat)
+
+    mean_cm: np.ndarray = sum(all_conf_matrices) / len(all_conf_matrices)
+    tn, fp, fn, tp = mean_cm.ravel().tolist()
+    acc, rec, f1 = compute_metrics(tn, fp, fn, tp)
+
+    logger.info("Finished Ensemble Cross Validation training")
+    logger.info(f"Accuracy (CV ensemble): {acc}")
+    logger.info(f"Recall (CV ensemble): {rec}")
+    logger.info(f"F1 score (CV ensemble): {f1}")
+    logger.info(
+        f"Confusion Matrix (CV ensemble) (TP, FP, FN, TN): "
+        f"({tp:.2f}, {fp:.2f}, {fn:.2f}, {tn:.2f})"
+    )
+
+    # Retrain final ensemble on 100% of df
+    logger.info(
+        f"Retraining final ensemble of {config.ensemble_size} models on full training data..."
+    )
+    final_ensemble: list[nn.Module] = []
+    for i in range(config.ensemble_size):
+        member_seed = config.seed + i
+        torch.manual_seed(member_seed)
+        np.random.seed(member_seed)
+        model_i = config.classifier(
+            bacterium_embed_size, phage_embed_size, **config.classifier_params
+        )
+        train_model(
+            train_df=df,
+            model=model_i,
+            training_config=tc,
+            device=config.device,
+            verbose=1,
+            progressbar_description=(
+                f"Final ensemble member {i + 1}/{config.ensemble_size}"
+            ),
+        )
+        final_ensemble.append(model_i)
+
+    return final_ensemble
