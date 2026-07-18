@@ -104,6 +104,7 @@ def get_ensemble_probabilities(
     all_labels: List[np.ndarray] = []
 
     for model in ensemble:
+        model.to(device)
         model.eval()
 
     with torch.no_grad():
@@ -112,10 +113,10 @@ def get_ensemble_probabilities(
             for model in ensemble:
                 logits = model(bact_emb, phg_emb)
                 probs = F.softmax(logits, dim=-1)[:, 1]  # positive class probability
-                member_probs.append(probs.cpu().numpy())
-            # Average across ensemble members
-            avg_probs = np.stack(member_probs, axis=0).mean(axis=0)
-            all_probs.append(avg_probs)
+                member_probs.append(probs)
+            # Average across ensemble members directly on GPU before copying to CPU
+            avg_probs = torch.stack(member_probs, dim=0).mean(dim=0)
+            all_probs.append(avg_probs.cpu().numpy())
             all_labels.append(labels.cpu().numpy())
 
     return np.concatenate(all_probs), np.concatenate(all_labels)
@@ -194,24 +195,29 @@ def test_nn_model(
     f1 = tm.F1Score(task="binary").to(device)
     cm_metric = tm.ConfusionMatrix(task="binary").to(device)
 
-    test_loss = 0.0
+    test_loss = torch.tensor(0.0, device=device)
+    model.to(device)
     model.eval()
+    accuracy.reset()
+    f1.reset()
+    recall.reset()
+    cm_metric.reset()
     with torch.no_grad():
         for bact_emb, phg_emb, labels in dataloader:
             logits = model(bact_emb, phg_emb)
             loss = criterion(logits, labels)
-            test_loss += loss.item() * bact_emb.size(0)
+            test_loss += loss.detach() * bact_emb.size(0)
 
             predictions = logits.argmax(dim=1, keepdim=True).squeeze()
 
             if not silent:
-                accuracy(predictions, labels)
-                f1(predictions, labels)
-                recall(predictions, labels)
-            cm_metric(predictions, labels)
+                accuracy.update(predictions, labels)
+                f1.update(predictions, labels)
+                recall.update(predictions, labels)
+            cm_metric.update(predictions, labels)
 
     cm_mat = cm_metric.compute().cpu().numpy()  # torchmetrics default: TN, FP, FN, TP
-    test_loss = test_loss / len(dataloader.dataset)  # type: ignore
+    test_loss = (test_loss / len(dataloader.dataset)).item()  # type: ignore
     tn, fp, fn, tp = cm_mat.ravel().tolist()
 
     if not silent:

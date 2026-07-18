@@ -101,6 +101,8 @@ def _train_ensemble(
         model_i = config.classifier(
             bacterium_embed_size, phage_embed_size, **config.classifier_params
         )
+        if isinstance(model_i, torch.nn.Module):
+            model_i.to(config.device)
         desc = f"{progressbar_prefix}Ensemble member {i + 1}/{config.ensemble_size}"
         if tc.k_folds_cv <= 1:
             train_model(

@@ -175,7 +175,11 @@ def train_nn_model(
     ) as tepochs:
         for epoch in tepochs:
             model.train()
-            train_loss = 0.0
+            accuracy.reset()
+            f1.reset()
+            recall.reset()
+            cm_metric.reset()
+            train_loss = torch.tensor(0.0, device=device)
             for bact_emb, phg_emb, labels in dataloader:
                 optimizer.zero_grad()
 
@@ -192,13 +196,13 @@ def train_nn_model(
                 loss = criterion(logits, labels)
                 loss.backward()
                 optimizer.step()
-                train_loss += loss.item() * bact_emb.size(0)
+                train_loss += loss.detach() * bact_emb.size(0)
 
                 predictions = logits.argmax(dim=1, keepdim=True).squeeze()
-                acc = accuracy(predictions, labels)
-                f1s = f1(predictions, labels)
-                rec = recall(predictions, labels)
-                cm_metric(predictions, labels)
+                accuracy.update(predictions, labels)
+                f1.update(predictions, labels)
+                recall.update(predictions, labels)
+                cm_metric.update(predictions, labels)
 
             # Advance non-plateau schedulers once per epoch
             if scheduler is not None and not isinstance(
@@ -255,9 +259,12 @@ def train_nn_model(
                     )
                 )
             else:
+                acc = accuracy.compute()
+                rec = recall.compute()
+                f1s = f1.compute()
                 tepochs.set_postfix(
                     OrderedDict(
-                        loss=loss.item(),
+                        loss=(train_loss / len(dataloader.dataset)).item(),
                         accuracy=100.0 * acc.item(),
                         recall=100.0 * rec.item(),
                         f1=100.0 * f1s.item(),
@@ -460,6 +467,8 @@ def kfold_train_ensemble(
             model_i = config.classifier(
                 bacterium_embed_size, phage_embed_size, **config.classifier_params
             )
+            if isinstance(model_i, nn.Module):
+                model_i.to(config.device)
             train_model(
                 train_df=train_fold_df,
                 model=model_i,
@@ -510,6 +519,8 @@ def kfold_train_ensemble(
         model_i = config.classifier(
             bacterium_embed_size, phage_embed_size, **config.classifier_params
         )
+        if isinstance(model_i, nn.Module):
+            model_i.to(config.device)
         train_model(
             train_df=df,
             model=model_i,

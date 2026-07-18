@@ -13,6 +13,7 @@ from pbi_utils.embeddings_merging_strategies.abstract_merger_strategy import (
 from pbi_utils.logging import Logging
 from pbi_utils.types import *
 import os
+import torch
 
 logger = Logging()
 
@@ -216,7 +217,16 @@ class Config:
         self.num_gpu = yaml_config.num_gpu
         self.gpu_id = yaml_config.gpu_id
         self.training_config = yaml_config.training_config
-        self.device = "cpu" if self.num_gpu == 0 else f"cuda:{self.gpu_id}"
+        if self.num_gpu == 0:
+            self.device = "cpu"
+        elif not torch.cuda.is_available():
+            logger.warning(
+                f"Config requested {self.num_gpu} GPU(s) (gpu_id={self.gpu_id}), but CUDA is not available. Falling back to CPU."
+            )
+            self.device = "cpu"
+        else:
+            self.device = f"cuda:{self.gpu_id}"
+        logger.debug(f"Config initialized with device: {self.device}")
         self.phages_embedding_models, self.compute_phages_embeddings = (
             self._parse_models(yaml_config.phages_embedding_models)
         )
