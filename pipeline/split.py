@@ -21,6 +21,7 @@ from typing import List, Literal
 
 import pandas as pd
 
+from pbi_utils.config_parser import KmerConfig
 from pbi_utils.data_manager import EmbeddingsManager
 from pbi_utils.logging import Logging
 from pipeline.data import make_dataset
@@ -166,6 +167,9 @@ def load_predefined_test_set(
     phages_model_names: List[str],
     output_manager: EmbeddingsManager,
     device: str,
+    kmer_config: KmerConfig | None = None,
+    bacteria_df: pd.DataFrame | None = None,
+    phages_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Load a predefined test set from a separate CSV file.
@@ -179,8 +183,11 @@ def load_predefined_test_set(
     :param phages_model_names: Phage embedding model names.
     :param output_manager: EmbeddingsManager for loading cached embeddings.
     :param device: Device to load tensors onto.
+    :param kmer_config: Optional KmerConfig specifying k values and sequence columns.
+    :param bacteria_df: Optional DataFrame with bacteria sequences.
+    :param phages_df: Optional DataFrame with phage sequences.
     :return: Test dataset DataFrame with ``bacterium_embedding`` and
-        ``phage_embedding`` columns.
+        ``phage_embedding`` columns (plus ``kmer_embedding`` if configured).
     """
     logger.info(f"Loading predefined test set from: {test_dataset_path}")
     test_couples_df = pd.read_csv(test_dataset_path)
@@ -190,4 +197,7 @@ def load_predefined_test_set(
         phages_model_names,
         output_manager,
         device,
+        kmer_config=kmer_config,
+        bacteria_df=bacteria_df,
+        phages_df=phages_df,
     )

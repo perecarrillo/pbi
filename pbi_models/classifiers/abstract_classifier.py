@@ -15,15 +15,22 @@ class AbstractNNClassifier(nn.Module, ABC):
     """
 
     @abstractmethod
-    def __init__(self, bacterium_embed_dim: int, phage_embed_dim: int):
+    def __init__(self, bacterium_embed_dim: int, phage_embed_dim: int, kmer_dim: int = 0):
         super().__init__()
+        self.kmer_dim = kmer_dim
 
     @abstractmethod
-    def forward(self, bacterium_emb: torch.Tensor, phage_emb: torch.Tensor):
+    def forward(
+        self,
+        bacterium_emb: torch.Tensor,
+        phage_emb: torch.Tensor,
+        kmer_emb: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         Inputs:
-            bacterium_emb: [batch, emb_dim]
-            phage_emb:     [batch, emb_dim]
+            bacterium_emb: [batch, bact_emb_dim]
+            phage_emb:     [batch, phag_emb_dim]
+            kmer_emb:      optional [batch, kmer_dim]
         Returns:
             logits: [batch, num_classes]
         """

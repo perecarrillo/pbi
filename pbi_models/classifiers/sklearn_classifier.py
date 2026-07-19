@@ -37,9 +37,11 @@ class SklearnClassifier(ABC):
         phage_embed_dim: int,
         sklearn_model_name: str,
         sklearn_model_params: dict,
+        kmer_dim: int = 0,
     ) -> None:
         self.sklearn_model_name = sklearn_model_name
         self.sklearn_model_params = sklearn_model_params
+        self.kmer_dim = kmer_dim
 
         self.sklearn_model = self._get_sklearn_classifier(sklearn_model_name)(
             **sklearn_model_params

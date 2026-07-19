@@ -186,20 +186,29 @@ bacteria_embedding_models:
     use_cached_embeddings: true
 
 # ---------------------------------------------------------------------------
+# K-mer frequency features (Optional)
+# ---------------------------------------------------------------------------
+
+# Optional k-mer frequency features. Skips PCA. (default: null).
+kmer_features:
+  k_values: [3, 4] # List of k-mer lengths to compute relative frequencies for (e.g. [3, 4, 5]).
+
+# ---------------------------------------------------------------------------
 # Classifier
 # ---------------------------------------------------------------------------
 
 # Fields:
 #   name (str): Class name in pbi_models.classifiers.
-#   params (dict): Constructor kwargs (excluding bacterium_embed_dim / phage_embed_dim,
-#                  which are inferred automatically from the embedding dimensions).
+#   params (dict): Constructor kwargs (excluding bacterium_embed_dim / phage_embed_dim / kmer_dim,
+#                  which are inferred automatically from the embedding and k-mer dimensions).
 
-# Example: two-branch MLP:
+# Example: two-branch MLP (plus optional k-mer branch):
 classifier:
   name: MLPClassifier
   params:
     bacterium_mlp_sizes: [64]
     phage_mlp_sizes: [128, 64]
+    kmer_mlp_sizes: [64]  # Optional dedicated branch for k-mer features when kmer_features is set
     dense_dim: 100
     dropout: 0.2
 

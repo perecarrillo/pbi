@@ -63,6 +63,17 @@ class InputConfig(BaseModel):
     couples_df: str
 
 
+class KmerConfig(BaseModel):
+    """
+    Configuration for optional k-mer frequency features.
+
+    Attributes:
+        k_values (List[int]): List of k values to compute features for (e.g. [3, 4, 5]).
+    """
+
+    k_values: List[int] = Field(default_factory=lambda: [4])
+
+
 class ClassifierConfig(BaseModel):
     """
     Configuration for the classifier model.
@@ -162,6 +173,7 @@ class YAMLConfig(BaseModel):
         ensemble_size (int): Number of independently-seeded models to train. When > 1, softmax probabilities are averaged at test time. Default is 1 (Single model).
         pca_components (int | str): Shorthand for PCA dimensionality reduction. When set to an integer N, sets both n_components_bacteria and n_components_phages to N and enables PCA. Default is "none".
         calibrate_threshold (bool): When True, performs a post-hoc threshold sweep on a held-out calibration set (split from training data) to maximise F1, then retrains on the full training set. Default is False.
+        kmer_features (KmerConfig | None): Configuration for optional k-mer frequency features.
     """
 
     input_perphect: str | InputConfig
@@ -180,6 +192,7 @@ class YAMLConfig(BaseModel):
     ensemble_size: int = 1
     pca_components: Union[int, str] = "none"
     calibrate_threshold: bool = False
+    kmer_features: KmerConfig | None = None
 
 
 class Config:
@@ -244,6 +257,8 @@ class Config:
         self.seed = yaml_config.seed
         self.ensemble_size = yaml_config.ensemble_size
         self.calibrate_threshold = yaml_config.calibrate_threshold
+        self.kmer_features = yaml_config.kmer_features
+        self.kmer_config = yaml_config.kmer_features
 
         # When pca_components set to an integer, override both PCA component counts and enable PCA dimensionality reduction.
         if yaml_config.pca_components != "none":
@@ -300,12 +315,19 @@ class Config:
         else:
             raise ValueError(f"Class {class_name} not found or is not a subclass of {(x.__name__ for x in subclass_of) if type(subclass_of) is tuple else subclass_of.__name__}.")  # type: ignore
 
+    @property
+    def kmer_dim(self) -> int:
+        """Total kmer vector dimension (bacteria + phage concatenated), or 0 if disabled."""
+        if self.kmer_features is None or not self.kmer_features.k_values:
+            return 0
+        return 2 * sum(4**k for k in self.kmer_features.k_values)
+
     def __repr__(self):
         return (
             f"Config(input_perphect={self.input_perphect}, embeddings_dir={self.embeddings_dir}, "
             f"num_gpu={self.num_gpu}, gpu_id={self.gpu_id}, "
             f"seed={self.seed}, ensemble_size={self.ensemble_size}, "
-            f"calibrate_threshold={self.calibrate_threshold}, "
+            f"calibrate_threshold={self.calibrate_threshold}, kmer_features={self.kmer_features}, "
             f"training_config=TrainingConfig({self.training_config}), "
             f"phages_embedding_models={self.phages_embedding_models}, "
             f"compute_phages_embeddings={self.compute_phages_embeddings}, "

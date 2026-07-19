@@ -52,7 +52,8 @@ class BranchMLP(nn.Module):
 
 class MLPClassifier(AbstractNNClassifier):
     """
-    General MLP classifier with two branches (one for bacteria, one for phages).
+    General MLP classifier with two branches (one for bacteria, one for phages) plus
+    an optional dedicated branch for k-mer features.
     """
 
     def __init__(
@@ -63,9 +64,11 @@ class MLPClassifier(AbstractNNClassifier):
         phage_mlp_sizes: list[int] | str,
         dropout: float | str = 0.2,
         dense_dim: int | str = 128,
+        kmer_dim: int = 0,
+        kmer_mlp_sizes: list[int] | str = [],
     ):
 
-        super().__init__(bacterium_embed_dim, phage_embed_dim)
+        super().__init__(bacterium_embed_dim, phage_embed_dim, kmer_dim)
 
         # Sanity checks
         self._sanity_checks(
@@ -74,6 +77,8 @@ class MLPClassifier(AbstractNNClassifier):
             bacterium_mlp_sizes,
             phage_mlp_sizes,
             dense_dim,
+            kmer_dim,
+            kmer_mlp_sizes,
         )
 
         # Convert params to dict
@@ -81,15 +86,22 @@ class MLPClassifier(AbstractNNClassifier):
             bacterium_mlp_sizes = self._parse_branch_params(bacterium_mlp_sizes)
         if isinstance(phage_mlp_sizes, str):
             phage_mlp_sizes = self._parse_branch_params(phage_mlp_sizes)
+        if isinstance(kmer_mlp_sizes, str):
+            kmer_mlp_sizes = self._parse_branch_params(kmer_mlp_sizes)
 
         self.bacterium_mlp_sizes = bacterium_mlp_sizes
         self.phage_mlp_sizes = phage_mlp_sizes
+        self.kmer_mlp_sizes = kmer_mlp_sizes
 
         # Branches
         self.bacteria_branch = BranchMLP(
             bacterium_mlp_sizes, bacterium_embed_dim, float(dropout)
         )
         self.phage_branch = BranchMLP(phage_mlp_sizes, phage_embed_dim, float(dropout))
+        if kmer_dim > 0:
+            self.kmer_branch = BranchMLP(kmer_mlp_sizes, kmer_dim, float(dropout))
+        else:
+            self.kmer_branch = None
 
         # Compute flattened size
         bacterium_flat_size = (
@@ -100,7 +112,12 @@ class MLPClassifier(AbstractNNClassifier):
         phage_flat_size = (
             phage_mlp_sizes[-1] if len(phage_mlp_sizes) > 0 else phage_embed_dim
         )
-        concat_dim = bacterium_flat_size + phage_flat_size
+        kmer_flat_size = (
+            (kmer_mlp_sizes[-1] if len(kmer_mlp_sizes) > 0 else kmer_dim)
+            if kmer_dim > 0
+            else 0
+        )
+        concat_dim = bacterium_flat_size + phage_flat_size + kmer_flat_size
 
         # Dense layers
         self.fc1 = nn.Linear(concat_dim, int(dense_dim))
@@ -114,6 +131,8 @@ class MLPClassifier(AbstractNNClassifier):
         bacterium_mlp_sizes,
         phage_mlp_sizes,
         dense_dim,
+        kmer_dim=0,
+        kmer_mlp_sizes=[],
     ):
         if isinstance(bacterium_mlp_sizes, list):
             for tpl in bacterium_mlp_sizes:
@@ -133,6 +152,15 @@ class MLPClassifier(AbstractNNClassifier):
             assert isinstance(
                 phage_mlp_sizes, str
             ), f"phage_conv_params must be either a list of integers or a string. Got: {phage_mlp_sizes}"
+        if isinstance(kmer_mlp_sizes, list):
+            for tpl in kmer_mlp_sizes:
+                assert isinstance(
+                    tpl, int
+                ), f"kmer_mlp_sizes must be a list of integers or a string. Got: {kmer_mlp_sizes}"
+        else:
+            assert isinstance(
+                kmer_mlp_sizes, str
+            ), f"kmer_mlp_sizes must be either a list of integers or a string. Got: {kmer_mlp_sizes}"
         assert isinstance(
             dense_dim, (int, str)
         ), f"dense_dim must be either an integer or a string. Got: {type(dense_dim)}: {dense_dim}"
@@ -142,6 +170,9 @@ class MLPClassifier(AbstractNNClassifier):
         assert isinstance(
             phage_embed_dim, int
         ), f"phage_embed_dim must be an integer. Got {type(phage_embed_dim)}: {phage_embed_dim}"
+        assert isinstance(
+            kmer_dim, int
+        ), f"kmer_dim must be an integer. Got {type(kmer_dim)}: {kmer_dim}"
 
     def _parse_branch_params(self, params_str: str) -> list[int]:
         """Parse branch parameters from string representation."""
@@ -149,12 +180,16 @@ class MLPClassifier(AbstractNNClassifier):
         return ast.literal_eval(params_str)
 
     def forward(
-        self, bacterium_emb: torch.Tensor, phage_emb: torch.Tensor
+        self,
+        bacterium_emb: torch.Tensor,
+        phage_emb: torch.Tensor,
+        kmer_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Inputs:
             bacterium_emb: [batch, emb_dim]
             phage_emb:     [batch, emb_dim]
+            kmer_emb:      optional [batch, kmer_dim]
         Returns:
             logits: [batch, num_classes]
         """
@@ -166,7 +201,12 @@ class MLPClassifier(AbstractNNClassifier):
         # Flatten & concatenate
         x_b = torch.flatten(x_b, start_dim=1)
         x_p = torch.flatten(x_p, start_dim=1)
-        x = torch.cat((x_b, x_p), dim=1)
+        if self.kmer_branch is not None and kmer_emb is not None:
+            x_k = self.kmer_branch(kmer_emb)
+            x_k = torch.flatten(x_k, start_dim=1)
+            x = torch.cat((x_b, x_p, x_k), dim=1)
+        else:
+            x = torch.cat((x_b, x_p), dim=1)
 
         # Dense layers
         x = F.relu(self.fc1(x))
@@ -179,7 +219,8 @@ class MLPClassifier(AbstractNNClassifier):
         return self.__repr__()
 
     def __repr__(self) -> str:
-        return f"""MLPClassifier(bacterium_mlp_sizes={self.bacterium_mlp_sizes}, phage_mlp_sizes={self.phage_mlp_sizes}), dense_dim={self.fc1.out_features}), dropout={self.dropout.p})"""
+        kmer_part = f", kmer_mlp_sizes={self.kmer_mlp_sizes}" if self.kmer_dim > 0 else ""
+        return f"""MLPClassifier(bacterium_mlp_sizes={self.bacterium_mlp_sizes}, phage_mlp_sizes={self.phage_mlp_sizes}{kmer_part}), dense_dim={self.fc1.out_features}), dropout={self.dropout.p})"""
 
 
 class BasicMLPClassifier(MLPClassifier):
@@ -189,8 +230,19 @@ class BasicMLPClassifier(MLPClassifier):
         phage_embed_dim: int,
         mlp_params: list[int] | str,
         dropout: float | str = 0.5,
+        kmer_dim: int = 0,
+        kmer_mlp_sizes: list[int] | str = [],
     ):
-        super().__init__(bacterium_embed_dim, phage_embed_dim, [], [], dropout, 0)
+        super().__init__(
+            bacterium_embed_dim,
+            phage_embed_dim,
+            [],
+            [],
+            dropout,
+            0,
+            kmer_dim,
+            kmer_mlp_sizes,
+        )
 
         if isinstance(mlp_params, str):
             self.params = self._parse_branch_params(mlp_params)
@@ -201,15 +253,31 @@ class BasicMLPClassifier(MLPClassifier):
             self.params, bacterium_embed_dim + phage_embed_dim, float(dropout)
         )
 
-        self.fc2 = nn.Linear(self.params[-1], 2)
+        if isinstance(kmer_mlp_sizes, str):
+            kmer_mlp_sizes = self._parse_branch_params(kmer_mlp_sizes)
+        self.kmer_mlp_sizes = kmer_mlp_sizes
+
+        if kmer_dim > 0:
+            self.kmer_branch = BranchMLP(kmer_mlp_sizes, kmer_dim, float(dropout))
+            kmer_flat = kmer_mlp_sizes[-1] if len(kmer_mlp_sizes) > 0 else kmer_dim
+        else:
+            self.kmer_branch = None
+            kmer_flat = 0
+
+        mlp_out = self.params[-1] if len(self.params) > 0 else bacterium_embed_dim + phage_embed_dim
+        self.fc2 = nn.Linear(mlp_out + kmer_flat, 2)
 
     def forward(
-        self, bacterium_emb: torch.Tensor, phage_emb: torch.Tensor
+        self,
+        bacterium_emb: torch.Tensor,
+        phage_emb: torch.Tensor,
+        kmer_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Inputs:
             bacterium_emb: [batch, emb_dim]
             phage_emb:     [batch, emb_dim]
+            kmer_emb:      optional [batch, kmer_dim]
         Returns:
             logits: [batch, num_classes]
         """
@@ -220,12 +288,18 @@ class BasicMLPClassifier(MLPClassifier):
 
         x = torch.flatten(x, start_dim=1)
 
+        if self.kmer_branch is not None and kmer_emb is not None:
+            x_k = self.kmer_branch(kmer_emb)
+            x_k = torch.flatten(x_k, start_dim=1)
+            x = torch.cat((x, x_k), dim=1)
+
         x = self.fc2(x)
         # No softmax, return raw logits
         return x
 
     def __repr__(self) -> str:
-        return f"""MLPClassifier(mlp_params: {self.params}, dropout={self.dropout.p})"""
+        kmer_part = f", kmer_mlp_sizes={self.kmer_mlp_sizes}" if self.kmer_dim > 0 else ""
+        return f"""BasicMLPClassifier(mlp_params: {self.params}{kmer_part}, dropout={self.dropout.p})"""
 
 
 class ResidualBranchMLP(nn.Module):
@@ -281,16 +355,7 @@ class ResidualBranchMLP(nn.Module):
 
 class AttentionMLPClassifier(AbstractNNClassifier):
     """
-    Two-branch MLP classifier with a scalar cross-attention gate.
-
-    Architecture:
-    1. Two :class:`ResidualBranchMLP` branches (one per organism) each project to
-       ``shared_dim = max(bact_out, phag_out)``.
-    2. A **scalar attention gate** lets the bacterium embedding query the phage
-       embedding: ``weight = sigmoid(dot(x_b, x_p) / sqrt(shared_dim))`` then
-       ``attn_out = weight * x_p``.
-    3. Concatenate ``[x_b, x_p, attn_out, x_b - attn_out]`` -> 4 * shared_dim.
-    4. ``Linear(4*shared_dim, dense_dim) -> ReLU -> LayerNorm -> Dropout -> Linear(dense_dim, 2)``
+    Two-branch MLP classifier with a scalar cross-attention gate plus optional k-mer branch.
     """
 
     def __init__(
@@ -302,19 +367,24 @@ class AttentionMLPClassifier(AbstractNNClassifier):
         dropout: float | str = 0.2,
         dense_dim: int | str = 128,
         use_layernorm: bool = True,
+        kmer_dim: int = 0,
+        kmer_mlp_sizes: list[int] | str = [],
     ):
-        super().__init__(bacterium_embed_dim, phage_embed_dim)
+        super().__init__(bacterium_embed_dim, phage_embed_dim, kmer_dim)
 
         # Parse string params
         if isinstance(bacterium_mlp_sizes, str):
             bacterium_mlp_sizes = ast.literal_eval(bacterium_mlp_sizes)
         if isinstance(phage_mlp_sizes, str):
             phage_mlp_sizes = ast.literal_eval(phage_mlp_sizes)
+        if isinstance(kmer_mlp_sizes, str):
+            kmer_mlp_sizes = ast.literal_eval(kmer_mlp_sizes)
         dropout = float(dropout)
         dense_dim = int(dense_dim)
 
         self._bacterium_mlp_sizes = bacterium_mlp_sizes
         self._phage_mlp_sizes = phage_mlp_sizes
+        self._kmer_mlp_sizes = kmer_mlp_sizes
         self._dropout_p = dropout
         self._dense_dim = dense_dim
 
@@ -325,6 +395,14 @@ class AttentionMLPClassifier(AbstractNNClassifier):
         self.phage_branch = ResidualBranchMLP(
             phage_mlp_sizes, phage_embed_dim, dropout, use_layernorm
         )
+        if kmer_dim > 0:
+            self.kmer_branch = ResidualBranchMLP(
+                kmer_mlp_sizes, kmer_dim, dropout, use_layernorm
+            )
+            kmer_out = self.kmer_branch.out_dim
+        else:
+            self.kmer_branch = None
+            kmer_out = 0
 
         bact_out = self.bacteria_branch.out_dim
         phag_out = self.phage_branch.out_dim
@@ -343,9 +421,9 @@ class AttentionMLPClassifier(AbstractNNClassifier):
             else nn.Identity()
         )
 
-        # Head: 4 * shared_dim -> dense_dim -> 2
+        # Head: 4 * shared_dim (+ kmer_out) -> dense_dim -> 2
         self.head = nn.Sequential(
-            nn.Linear(4 * shared_dim, dense_dim),
+            nn.Linear(4 * shared_dim + kmer_out, dense_dim),
             nn.ReLU(),
             nn.LayerNorm(dense_dim),
             nn.Dropout(dropout),
@@ -353,11 +431,15 @@ class AttentionMLPClassifier(AbstractNNClassifier):
         )
 
     def forward(
-        self, bacterium_emb: torch.Tensor, phage_emb: torch.Tensor
+        self,
+        bacterium_emb: torch.Tensor,
+        phage_emb: torch.Tensor,
+        kmer_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         :param bacterium_emb: ``[batch, bacterium_embed_dim]``
         :param phage_emb: ``[batch, phage_embed_dim]``
+        :param kmer_emb: optional ``[batch, kmer_dim]``
         :return: Logits ``[batch, 2]``
         """
         x_b = self.bact_proj(self.bacteria_branch(bacterium_emb))
@@ -370,16 +452,20 @@ class AttentionMLPClassifier(AbstractNNClassifier):
         attn_out = weight * x_p
 
         combined = torch.cat([x_b, x_p, attn_out, x_b - attn_out], dim=-1)
+        if self.kmer_branch is not None and kmer_emb is not None:
+            x_k = self.kmer_branch(kmer_emb)
+            combined = torch.cat([combined, x_k], dim=-1)
         return self.head(combined)
 
     def name(self) -> str:
         return self.__repr__()
 
     def __repr__(self) -> str:
+        kmer_part = f", kmer_mlp_sizes={self._kmer_mlp_sizes}" if self.kmer_dim > 0 else ""
         return (
             f"AttentionMLPClassifier("
             f"bacterium_mlp_sizes={self._bacterium_mlp_sizes}, "
-            f"phage_mlp_sizes={self._phage_mlp_sizes}, "
+            f"phage_mlp_sizes={self._phage_mlp_sizes}{kmer_part}, "
             f"dense_dim={self._dense_dim}, "
             f"dropout={self._dropout_p})"
         )
@@ -387,13 +473,7 @@ class AttentionMLPClassifier(AbstractNNClassifier):
 
 class BilinearMLPClassifier(AbstractNNClassifier):
     """
-    Two-branch MLP classifier using ``nn.Bilinear`` as a pairwise interaction layer.
-
-    Architecture:
-    1. Two :class:`ResidualBranchMLP` branches -> project to ``shared_dim``.
-    2. ``interaction = ReLU(Bilinear(x_b, x_p))`` -> ``n_factors`` features.
-    3. Concatenate ``[x_b, x_p, interaction]`` -> 2 * shared_dim + n_factors.
-    4. ``Linear -> ReLU -> LayerNorm -> Dropout -> Linear -> logits``
+    Two-branch MLP classifier using ``nn.Bilinear`` plus optional k-mer branch.
     """
 
     def __init__(
@@ -406,19 +486,24 @@ class BilinearMLPClassifier(AbstractNNClassifier):
         dense_dim: int | str = 128,
         n_factors: int | str = 64,
         use_layernorm: bool = True,
+        kmer_dim: int = 0,
+        kmer_mlp_sizes: list[int] | str = [],
     ):
-        super().__init__(bacterium_embed_dim, phage_embed_dim)
+        super().__init__(bacterium_embed_dim, phage_embed_dim, kmer_dim)
 
         if isinstance(bacterium_mlp_sizes, str):
             bacterium_mlp_sizes = ast.literal_eval(bacterium_mlp_sizes)
         if isinstance(phage_mlp_sizes, str):
             phage_mlp_sizes = ast.literal_eval(phage_mlp_sizes)
+        if isinstance(kmer_mlp_sizes, str):
+            kmer_mlp_sizes = ast.literal_eval(kmer_mlp_sizes)
         dropout = float(dropout)
         dense_dim = int(dense_dim)
         n_factors = int(n_factors)
 
         self._bacterium_mlp_sizes = bacterium_mlp_sizes
         self._phage_mlp_sizes = phage_mlp_sizes
+        self._kmer_mlp_sizes = kmer_mlp_sizes
         self._dropout_p = dropout
         self._dense_dim = dense_dim
         self._n_factors = n_factors
@@ -429,6 +514,14 @@ class BilinearMLPClassifier(AbstractNNClassifier):
         self.phage_branch = ResidualBranchMLP(
             phage_mlp_sizes, phage_embed_dim, dropout, use_layernorm
         )
+        if kmer_dim > 0:
+            self.kmer_branch = ResidualBranchMLP(
+                kmer_mlp_sizes, kmer_dim, dropout, use_layernorm
+            )
+            kmer_out = self.kmer_branch.out_dim
+        else:
+            self.kmer_branch = None
+            kmer_out = 0
 
         bact_out = self.bacteria_branch.out_dim
         phag_out = self.phage_branch.out_dim
@@ -448,7 +541,7 @@ class BilinearMLPClassifier(AbstractNNClassifier):
 
         self.bilinear = nn.Bilinear(shared_dim, shared_dim, n_factors)
 
-        concat_dim = 2 * shared_dim + n_factors
+        concat_dim = 2 * shared_dim + n_factors + kmer_out
         self.head = nn.Sequential(
             nn.Linear(concat_dim, dense_dim),
             nn.ReLU(),
@@ -458,27 +551,35 @@ class BilinearMLPClassifier(AbstractNNClassifier):
         )
 
     def forward(
-        self, bacterium_emb: torch.Tensor, phage_emb: torch.Tensor
+        self,
+        bacterium_emb: torch.Tensor,
+        phage_emb: torch.Tensor,
+        kmer_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         :param bacterium_emb: ``[batch, bacterium_embed_dim]``
         :param phage_emb: ``[batch, phage_embed_dim]``
+        :param kmer_emb: optional ``[batch, kmer_dim]``
         :return: Logits ``[batch, 2]``
         """
         x_b = self.bact_proj(self.bacteria_branch(bacterium_emb))
         x_p = self.phag_proj(self.phage_branch(phage_emb))
         interaction = F.relu(self.bilinear(x_b, x_p))
         combined = torch.cat([x_b, x_p, interaction], dim=-1)
+        if self.kmer_branch is not None and kmer_emb is not None:
+            x_k = self.kmer_branch(kmer_emb)
+            combined = torch.cat([combined, x_k], dim=-1)
         return self.head(combined)
 
     def name(self) -> str:
         return self.__repr__()
 
     def __repr__(self) -> str:
+        kmer_part = f", kmer_mlp_sizes={self._kmer_mlp_sizes}" if self.kmer_dim > 0 else ""
         return (
             f"BilinearMLPClassifier("
             f"bacterium_mlp_sizes={self._bacterium_mlp_sizes}, "
-            f"phage_mlp_sizes={self._phage_mlp_sizes}, "
+            f"phage_mlp_sizes={self._phage_mlp_sizes}{kmer_part}, "
             f"dense_dim={self._dense_dim}, "
             f"n_factors={self._n_factors}, "
             f"dropout={self._dropout_p})"

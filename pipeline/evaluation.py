@@ -77,14 +77,14 @@ def test_model(
     if isinstance(model, list):
         return test_nn_ensemble(test_df, model, batch_size, device, threshold, silent)
     elif isinstance(model, nn.Module):
-        return test_nn_model(test_df, model, batch_size, device, silent)
+        return test_nn_model(test_df, model, batch_size, device, threshold, silent)
     else:
-        return test_sklearn_model(test_df, model, batch_size, device, silent)
+        return test_sklearn_model(test_df, model, batch_size, device, threshold, silent)
 
 
 def get_ensemble_probabilities(
     test_df: pd.DataFrame,
-    ensemble: List[nn.Module],
+    ensemble: List[Any],
     batch_size: int,
     device: str,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -92,13 +92,29 @@ def get_ensemble_probabilities(
     Compute ensemble-averaged positive-class probabilities for every sample.
 
     :param test_df: Test DataFrame.
-    :param ensemble: List of trained ``nn.Module`` models.
+    :param ensemble: List of trained models (nn.Module or SklearnClassifier).
     :param batch_size: Batch size.
     :param device: Device string.
     :return: ``(probabilities, labels)`` where *probabilities* is a 1-D array of
-        ensemble-averaged ``softmax[:, 1]`` values and *labels* is the ground-truth
-        integer array.
+        ensemble-averaged probabilities and *labels* is the ground-truth integer array.
     """
+    if not ensemble:
+        raise ValueError("Ensemble list cannot be empty.")
+
+    if not isinstance(ensemble[0], nn.Module):
+        X_test, y_test = dataframe_to_numpy_X_y(test_df)
+        member_probs = []
+        for model in ensemble:
+            if hasattr(model, "predict_proba"):
+                probs = model.predict_proba(X_test)[:, 1]
+            elif hasattr(model, "sklearn_model") and hasattr(model.sklearn_model, "predict_proba"):
+                probs = model.sklearn_model.predict_proba(X_test)[:, 1]
+            else:
+                probs = model.predict(X_test).astype(float)
+            member_probs.append(probs)
+        avg_probs = np.mean(member_probs, axis=0)
+        return avg_probs, np.asarray(y_test)
+
     dataloader = dataframe_to_tf_dataloader(test_df, batch_size, device)
     all_probs: List[np.ndarray] = []
     all_labels: List[np.ndarray] = []
@@ -108,10 +124,15 @@ def get_ensemble_probabilities(
         model.eval()
 
     with torch.no_grad():
-        for bact_emb, phg_emb, labels in dataloader:
+        for batch in dataloader:
+            if len(batch) == 4:
+                bact_emb, phg_emb, kmer_emb, labels = batch
+            else:
+                bact_emb, phg_emb, labels = batch
+                kmer_emb = None
             member_probs = []
             for model in ensemble:
-                logits = model(bact_emb, phg_emb)
+                logits = model(bact_emb, phg_emb, kmer_emb)
                 probs = F.softmax(logits, dim=-1)[:, 1]  # positive class probability
                 member_probs.append(probs)
             # Average across ensemble members directly on GPU before copying to CPU
@@ -176,6 +197,7 @@ def test_nn_model(
     model: nn.Module,
     batch_size: int,
     device: str,
+    threshold: float = 0.5,
     silent: bool = False,
 ) -> tuple[np.ndarray, float]:
     """
@@ -203,12 +225,21 @@ def test_nn_model(
     recall.reset()
     cm_metric.reset()
     with torch.no_grad():
-        for bact_emb, phg_emb, labels in dataloader:
-            logits = model(bact_emb, phg_emb)
+        for batch in dataloader:
+            if len(batch) == 4:
+                bact_emb, phg_emb, kmer_emb, labels = batch
+            else:
+                bact_emb, phg_emb, labels = batch
+                kmer_emb = None
+            logits = model(bact_emb, phg_emb, kmer_emb)
             loss = criterion(logits, labels)
             test_loss += loss.detach() * bact_emb.size(0)
 
-            predictions = logits.argmax(dim=1, keepdim=True).squeeze()
+            if threshold != 0.5:
+                probs = F.softmax(logits, dim=1)[:, 1]
+                predictions = (probs >= threshold).long()
+            else:
+                predictions = logits.argmax(dim=1, keepdim=True).squeeze()
 
             if not silent:
                 accuracy.update(predictions, labels)
@@ -238,6 +269,7 @@ def test_sklearn_model(
     model: SklearnClassifier,
     batch_size: int,
     device: str,
+    threshold: float = 0.5,
     silent: bool = False,
 ) -> tuple[np.ndarray, float]:
     """
@@ -249,7 +281,11 @@ def test_sklearn_model(
         logger.info("Starting testing...")
 
     X_test, y_test = dataframe_to_numpy_X_y(test_df)
-    y_pred = model.predict(X_test)
+    if threshold != 0.5 and hasattr(model, "predict_proba"):
+        probs = model.predict_proba(X_test)[:, 1]
+        y_pred = (probs >= threshold).astype(int)
+    else:
+        y_pred = model.predict(X_test)
 
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = cm.ravel().tolist()

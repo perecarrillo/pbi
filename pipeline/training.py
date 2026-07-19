@@ -180,7 +180,12 @@ def train_nn_model(
             recall.reset()
             cm_metric.reset()
             train_loss = torch.tensor(0.0, device=device)
-            for bact_emb, phg_emb, labels in dataloader:
+            for batch in dataloader:
+                if len(batch) == 4:
+                    bact_emb, phg_emb, kmer_emb, labels = batch
+                else:
+                    bact_emb, phg_emb, labels = batch
+                    kmer_emb = None
                 optimizer.zero_grad()
 
                 # Optional embedding noise for regularisation
@@ -192,7 +197,7 @@ def train_nn_model(
                         torch.randn_like(phg_emb) * training_config.training_noise_std
                     )
 
-                logits = model(bact_emb, phg_emb)
+                logits = model(bact_emb, phg_emb, kmer_emb)
                 loss = criterion(logits, labels)
                 loss.backward()
                 optimizer.step()
@@ -465,7 +470,10 @@ def kfold_train_ensemble(
             torch.manual_seed(member_seed)
             np.random.seed(member_seed)
             model_i = config.classifier(
-                bacterium_embed_size, phage_embed_size, **config.classifier_params
+                bacterium_embed_size,
+                phage_embed_size,
+                kmer_dim=config.kmer_dim,
+                **config.classifier_params,
             )
             if isinstance(model_i, nn.Module):
                 model_i.to(config.device)
@@ -517,7 +525,10 @@ def kfold_train_ensemble(
         torch.manual_seed(member_seed)
         np.random.seed(member_seed)
         model_i = config.classifier(
-            bacterium_embed_size, phage_embed_size, **config.classifier_params
+            bacterium_embed_size,
+            phage_embed_size,
+            kmer_dim=config.kmer_dim,
+            **config.classifier_params,
         )
         if isinstance(model_i, nn.Module):
             model_i.to(config.device)

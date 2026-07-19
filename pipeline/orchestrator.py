@@ -99,7 +99,10 @@ def _train_ensemble(
         member_seed = config.seed + i
         _set_seeds(member_seed)
         model_i = config.classifier(
-            bacterium_embed_size, phage_embed_size, **config.classifier_params
+            bacterium_embed_size,
+                phage_embed_size,
+                kmer_dim=config.kmer_dim,
+                **config.classifier_params,
         )
         if isinstance(model_i, torch.nn.Module):
             model_i.to(config.device)
@@ -189,6 +192,9 @@ def run_full_pipeline(config: Config) -> None:
         phages_model_names,
         output_manager,
         config.device,
+        kmer_config=config.kmer_features,
+        bacteria_df=bacteria_df,
+        phages_df=phages_df,
     )
 
     tc = config.training_config
@@ -210,6 +216,9 @@ def run_full_pipeline(config: Config) -> None:
                 phages_model_names,
                 output_manager,
                 config.device,
+                kmer_config=config.kmer_features,
+                bacteria_df=bacteria_df,
+                phages_df=phages_df,
             )
             # Apply the same PCA fitted on training data
             if pca_bact is not None and pca_phag is not None:
