@@ -53,6 +53,15 @@ class SklearnClassifier(ABC):
     def predict(self, *args, **kwargs):
         return self.sklearn_model.predict(*args, **kwargs)
 
+    def predict_proba(self, *args, **kwargs):
+        return self.sklearn_model.predict_proba(*args, **kwargs)
+
+    def __getattr__(self, name):
+        try:
+            return getattr(self.sklearn_model, name)
+        except AttributeError:
+            raise AttributeError(f"'SklearnClassifier' object and its underlying '{self.sklearn_model_name}' have no attribute '{name}'")
+
     def reset_model(self, *args, **kwargs):
         self.sklearn_model = self._get_sklearn_classifier(self.sklearn_model_name)(
             **self.sklearn_model_params
