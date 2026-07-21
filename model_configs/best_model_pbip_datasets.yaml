@@ -1,3 +1,5 @@
+seed: 42
+
 input_perphect:
   bacteria_df: data/perphect-data/predphi/bacteria_sequences.csv
   phages_df: data/perphect-data/predphi/bacteriophages_sequences.csv
@@ -5,25 +7,28 @@ input_perphect:
 
 embeddings_dir: data/embeddings-pbip
 output_dir: output/pbip/test
-num_gpu: 0
+num_gpu: 1
 gpu_id: 0
+
+pca_components: 300
+ensemble_size: 5
 
 training_config:
   do_test: true
   epochs: 100
-  learning_rate: 1e-3
+  learning_rate: 5.0e-4
+  weight_decay: 1.0e-4
   batch_size: 256
 
   training_noise_std: 0.05
 
-  lr_schedule: cosine  # Options: plateau, cosine, none
+  lr_schedule: cosine
 
   stratify_cv: true
-  k_folds_cv: 10
+  k_folds_cv: 1
 
-  # test_split_strategy: random  # Options: random, phage, bacteria
+  test_split_strategy: predefined
   test_dataset_path: data/perphect-data/predphi/predphi_test_dataset.csv
-  test_size: 0.2
 
 phages_embedding_models:
   - name: NT2
@@ -67,11 +72,14 @@ bacteria_embedding_models:
     strategy: BottomTruncateStrategy
     use_cached_embeddings: true
 
+kmer_features:
+  k_values: [4]
 
 classifier: 
   name: MLPClassifier
   params:
     bacterium_mlp_sizes: [256, 128]
     phage_mlp_sizes: [256, 128]
+    kmer_mlp_sizes: [128, 64]
     dense_dim: 256
     dropout: 0.4
