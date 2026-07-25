@@ -191,6 +191,7 @@ class YAMLConfig(BaseModel):
     seed: int = 42
     ensemble_size: int = 1
     pca_components: Union[int, str] = "none"
+    reducer_type: DIMENSIONALITY_REDUCTION_TECHNIQUE = "PCA"
     calibrate_threshold: bool = False
     kmer_features: KmerConfig | None = None
 
@@ -260,12 +261,13 @@ class Config:
         self.kmer_features = yaml_config.kmer_features
         self.kmer_config = yaml_config.kmer_features
 
-        # When pca_components set to an integer, override both PCA component counts and enable PCA dimensionality reduction.
+        # When pca_components set to an integer, override both component counts and enable
+        # dimensionality reduction. reducer_type controls PCA vs UMAP.
         if yaml_config.pca_components != "none":
             n = int(yaml_config.pca_components)
             self.training_config.n_components_bacteria = n
             self.training_config.n_components_phages = n
-            self.training_config.reduce_dimensionality = "PCA"
+            self.training_config.reduce_dimensionality = yaml_config.reducer_type
 
         tc = self.training_config
         if tc.test_split_strategy == "predefined" and tc.test_dataset_path is None:

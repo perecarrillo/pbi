@@ -1,19 +1,7 @@
-"""
-Dimensionality reduction for organism embeddings.
-
-The public surface is three functions:
-
-* ``fit_pca``: fit PCA on a dataset (training set only) and return the fitted objects.
-* ``transform_pca``: apply previously fitted PCA objects to any dataset (train or test).
-* ``reduce_dimensionality``: high-level wrapper; dispatches by technique and returns
-  both the transformed dataset **and** the fitted reducer objects so the caller can
-  reuse them (e.g. to transform a held-out test set with the same PCA).
-"""
-
 from __future__ import annotations
 
 import os
-from typing import Tuple
+from typing import Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -67,11 +55,6 @@ def _numpy_to_tensor_list(array: np.ndarray) -> list:
     return list(torch.from_numpy(array).float())
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def fit_pca(
     dataset: pd.DataFrame,
     n_components_bact: int | None,
@@ -79,22 +62,6 @@ def fit_pca(
     output_dir: str | None = None,
     random_state: int = 42,
 ) -> Tuple[PCA, PCA]:
-    """
-    Fit PCA on the bacterium and phage embeddings of *dataset*.
-
-    Call this on the **training set only** to avoid data leakage from the test set.
-    Pass the returned PCA objects to :func:`transform_pca` to apply them to any split.
-
-    :param dataset: DataFrame with ``bacterium_embedding`` and ``phage_embedding``
-        columns containing torch tensors.
-    :param n_components_bact: Number of PCA components to keep for bacteria.
-        ``None`` keeps all components.
-    :param n_components_phag: Number of PCA components to keep for phages.
-        ``None`` keeps all components.
-    :param output_dir: If provided, saves explained-variance plots there.
-    :param random_state: Random seed for PCA reproducibility.
-    :return: ``(pca_bact, pca_phag)``, fitted sklearn PCA objects.
-    """
     pca_bact = PCA(random_state=random_state, n_components=n_components_bact)
     pca_phag = PCA(random_state=random_state, n_components=n_components_phag)
 
@@ -155,40 +122,83 @@ def transform_pca(
     return result
 
 
+# ---------------------------------------------------------------------------
+# UMAP helpers
+# ---------------------------------------------------------------------------
+
+
+def fit_umap(
+    dataset: pd.DataFrame,
+    n_components: int = 200,
+    random_state: int = 42,
+) -> Tuple[Any, Any]:
+    try:
+        import umap  # type: ignore
+    except ImportError as e:
+        raise ImportError(
+            "umap-learn is required for UMAP reduction. Install it with: "
+            "pip install umap-learn"
+        ) from e
+
+    logger.info(f"Fitting UMAP (n_components={n_components}) on bacteria embeddings...")
+    umap_bact = umap.UMAP(
+        n_components=n_components,
+        random_state=random_state,
+        n_jobs=1,  # deterministic
+    )
+    umap_bact.fit(_embeddings_to_numpy(dataset["bacterium_embedding"]))
+
+    logger.info(f"Fitting UMAP (n_components={n_components}) on phage embeddings...")
+    umap_phag = umap.UMAP(
+        n_components=n_components,
+        random_state=random_state,
+        n_jobs=1,
+    )
+    umap_phag.fit(_embeddings_to_numpy(dataset["phage_embedding"]))
+
+    return umap_bact, umap_phag
+
+
+def transform_umap(
+    dataset: pd.DataFrame,
+    umap_bact: Any,
+    umap_phag: Any,
+) -> pd.DataFrame:
+    result = dataset.copy()
+
+    result["bacterium_embedding"] = _numpy_to_tensor_list(
+        umap_bact.transform(_embeddings_to_numpy(result["bacterium_embedding"]))
+    )
+    result["phage_embedding"] = _numpy_to_tensor_list(
+        umap_phag.transform(_embeddings_to_numpy(result["phage_embedding"]))
+    )
+
+    return result
+
+
 def reduce_dimensionality(
     dataset: pd.DataFrame,
     technique: DIMENSIONALITY_REDUCTION_TECHNIQUE,
     output_dir: str | None,
     n_components_bact: int | None = None,
     n_components_phag: int | None = None,
-) -> Tuple[pd.DataFrame, PCA | None, PCA | None]:
-    """
-    High-level dimensionality reduction wrapper.
-
-    Dispatches to the appropriate technique and returns both the transformed dataset
-    **and** the fitted reducer objects.  Callers that need to transform a separate
-    test set should pass the returned PCA objects to :func:`transform_pca`.
-
-    :param dataset: DataFrame with ``bacterium_embedding`` and ``phage_embedding``
-        columns containing torch tensors.
-    :param technique: Dimensionality reduction technique.  One of
-        ``DIMENSIONALITY_REDUCTION_TECHNIQUE`` (``"none"`` or ``"PCA"``).
-    :param output_dir: Directory for output plots (PCA only).
-    :param n_components_bact: Number of PCA components for bacteria (``None`` = all).
-    :param n_components_phag: Number of PCA components for phages (``None`` = all).
-    :return: ``(transformed_dataset, pca_bact, pca_phag)``.  The PCA objects are
-        ``None`` when technique is ``"none"``.
-    :raises ValueError: For unsupported techniques.
-    """
+    random_state: int = 42,
+) -> Tuple[pd.DataFrame, Any | None, Any | None]:
     if technique == "none":
         return dataset, None, None
 
     elif technique == "PCA":
         pca_bact, pca_phag = fit_pca(
-            dataset, n_components_bact, n_components_phag, output_dir
+            dataset, n_components_bact, n_components_phag, output_dir, random_state
         )
         transformed = transform_pca(dataset, pca_bact, pca_phag)
         return transformed, pca_bact, pca_phag
+
+    elif technique == "UMAP":
+        n_comp = n_components_bact if n_components_bact is not None else 200
+        umap_bact, umap_phag = fit_umap(dataset, n_components=n_comp, random_state=random_state)
+        transformed = transform_umap(dataset, umap_bact, umap_phag)
+        return transformed, umap_bact, umap_phag
 
     else:
         raise ValueError(
