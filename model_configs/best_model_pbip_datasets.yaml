@@ -10,8 +10,9 @@ output_dir: output/pbip/test
 num_gpu: 1
 gpu_id: 0
 
-pca_components: 300
-ensemble_size: 5
+pca_components: 200
+ensemble_size: 10
+reducer_type: PCA
 
 training_config:
   do_test: true
@@ -29,6 +30,9 @@ training_config:
 
   test_split_strategy: predefined
   test_dataset_path: data/perphect-data/predphi/predphi_test_dataset.csv
+  loss_type: focal
+  focal_gamma: 2.0
+  focal_alpha: 0.85
 
 phages_embedding_models:
   - name: NT2

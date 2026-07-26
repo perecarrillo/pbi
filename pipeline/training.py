@@ -28,6 +28,98 @@ from pipeline.evaluation import test_model, test_nn_ensemble, compute_metrics
 
 logger = Logging()
 
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for binary classification.
+
+    :param gamma: Focusing parameter γ ≥ 0. (0 = standard cross-entropy).
+    :param alpha: Per-class weighting tensor of shape ``[num_classes]``.
+        For binary: ``[1-alpha_pos, alpha_pos]`` where ``alpha_pos > 0.5``
+        gives extra weight to the positive class.
+    :param label_smoothing: Optional label smoothing applied before the focal
+        loss; avoids overconfident predictions.
+    :param reduction: ``'mean'`` or ``'sum'``.
+    """
+
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: torch.Tensor | None = None,
+        label_smoothing: float = 0.0,
+        reduction: str = "mean",
+    ):
+        super().__init__()
+        self.gamma = gamma
+        self.register_buffer("alpha", alpha)  # saved in state_dict, moved with .to()
+        self.label_smoothing = label_smoothing
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        :param logits: ``[B, C]`` raw model outputs (before softmax).
+        :param targets: ``[B]`` integer class indices.
+        """
+        num_classes = logits.size(1)
+        # Soft labels for label smoothing
+        if self.label_smoothing > 0.0:
+            smooth = self.label_smoothing / num_classes
+            log_probs = torch.log_softmax(logits, dim=1)
+            # KL-divergence style: (1-ls)*CE + ls * uniform
+            ce = -log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+            ce = ce * (1.0 - self.label_smoothing) + smooth * (-log_probs.mean(dim=1))
+        else:
+            log_probs = torch.log_softmax(logits, dim=1)
+            ce = -log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+
+        # Focal weight: (1 - p_t)^gamma
+        probs = torch.softmax(logits, dim=1)
+        pt = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1.0 - pt) ** self.gamma
+
+        loss = focal_weight * ce
+
+        # Per-class alpha weighting
+        if self.alpha is not None:
+            at = self.alpha.gather(0, targets)
+            loss = at * loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
+def build_criterion(
+    training_config: "TrainingConfig",
+    pos_weight: float,
+    device: str,
+) -> nn.Module:
+    """
+    Returns the loss object to be used, defined by training_config.loss_type
+    """
+    loss_type = getattr(training_config, "loss_type", "cross_entropy")
+    label_smoothing = getattr(training_config, "label_smoothing", 0.0)
+
+    if loss_type == "focal":
+        gamma = float(getattr(training_config, "focal_gamma", 2.0))
+        alpha_pos = float(getattr(training_config, "focal_alpha", 0.75))
+        # alpha: [weight_neg, weight_pos]
+        alpha = torch.tensor([1.0 - alpha_pos, alpha_pos], device=device)
+        return FocalLoss(
+            gamma=gamma,
+            alpha=alpha,
+            label_smoothing=label_smoothing,
+        )
+    else:
+        class_weights = torch.tensor([1.0, float(pos_weight)], device=device)
+        return nn.CrossEntropyLoss(
+            weight=class_weights,
+            label_smoothing=label_smoothing,
+        )
+
+
 def _create_scheduler(
     optimizer: torch.optim.Optimizer,
     training_config: TrainingConfig,
@@ -144,8 +236,7 @@ def train_nn_model(
         lr=training_config.learning_rate,
         weight_decay=training_config.weight_decay,
     )
-    class_weights = torch.tensor([1.0, float(pos_weight)], device=device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = build_criterion(training_config, pos_weight, device)
 
     scheduler = _create_scheduler(optimizer, training_config)
 

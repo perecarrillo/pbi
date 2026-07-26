@@ -122,6 +122,10 @@ class TrainingConfig(BaseModel):
         test_dataset_path (str | None): Path to a separate CSV file to use as the test set. Required when ``test_split_strategy="predefined"``.
         test_size (float): Fraction of the dataset to reserve for testing when ``test_split_strategy="random"``.
         n_holdout_test (int | None): Number of unique phage/bacteria IDs to hold out when ``test_split_strategy`` is ``"phage"``, ``"bacteria"``, or ``"organism"``.
+        loss_type (str): Loss function to use during NN training. Can be "cross_entropy" or "focal".
+        label_smoothing (float): Label smoothing applied inside the loss function. Supported by both ``cross_entropy`` and ``focal`` loss types.
+        focal_gamma (float): Focusing parameter γ for Focal Loss. Ignored when ``loss_type!='focal'``. Default 2.0.
+        focal_alpha (float): Positive-class weight α ∈ (0, 1) for Focal Loss. Values > 0.5 up-weight the positive class. Default 0.75.
     """
 
     do_train: bool = True
@@ -153,6 +157,11 @@ class TrainingConfig(BaseModel):
     test_size: float = 0.2
     n_holdout_test: int | None = None
 
+    # Loss function
+    loss_type: Literal["cross_entropy", "focal"] = "cross_entropy"
+    label_smoothing: float = 0.0
+    focal_gamma: float = 2.0
+    focal_alpha: float = 0.75
 
 class YAMLConfig(BaseModel):
     """
