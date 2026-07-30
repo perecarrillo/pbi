@@ -4,6 +4,7 @@ from pbi_utils.embeddings_merging_strategies.abstract_merger_strategy import (
     AbstractMergerStrategy,
 )
 from pbi_utils.embeddings_merging_strategies.truncate_strategy import TruncateStrategy
+from pbi_utils.utils import clean_gpu
 
 
 class AbstractModel(ABC):
@@ -37,22 +38,38 @@ class AbstractModel(ABC):
         self.device = device
         super().__init__()
 
-    def embed(self, dna_sequence: str) -> torch.Tensor:
-        """Compute the embedding for a DNA sequence.
-        The sequence is split into overlapping (or not) subsequences, tokenized using the function _encode that the child class must implement,
-        and then the embeddings for each subsequence are computed using the function _compute_single_embedding that the child class must also implement.
-        Finally, the embeddings are merged using the specified merging strategy.
+    def embed_raw(self, dna_sequence: str) -> torch.Tensor:
+        """Compute the raw, unmerged subsequence embeddings for a DNA sequence.
+        Returns a 2D tensor of shape [N, hidden_dim].
         """
-
         if not self.load_model:
             raise RuntimeError(
                 "Model not loaded. If you want to compute embeddings, please set load_model to True when initializing the class."
             )
 
-        # Manually split the sequences
         sequences = self._split_sequence(dna_sequence)
 
-        # Only keep the first chunk if using TruncateStrategy. Bad practice, but much faster
+        chunk_batch_size = max(16, self.batch_size)
+        outputs = []
+        for i in range(0, len(sequences), chunk_batch_size):
+            seq_batch = sequences[i : i + chunk_batch_size]
+            tokens = self._encode(seq_batch)
+            batch_embeds = self._compute_batch_embeddings(tokens)
+            if batch_embeds.dim() == 3 and batch_embeds.size(1) == 1:
+                batch_embeds = batch_embeds.squeeze(1)
+            outputs.append(batch_embeds.cpu())
+            del tokens, batch_embeds
+            clean_gpu()
+
+        embeddings = torch.cat(outputs, dim=0)
+        clean_gpu()
+        return embeddings
+
+    def embed(self, dna_sequence: str) -> torch.Tensor:
+        """Compute the merged embedding for a DNA sequence."""
+        sequences = self._split_sequence(dna_sequence)
+
+        # Only keep the required chunks if using truncation strategies
         if self.merging_strategy.name() == "TruncateStrategy":
             sequences = [sequences[0]]
         elif self.merging_strategy.name() == "BottomTruncateStrategy":
@@ -60,15 +77,11 @@ class AbstractModel(ABC):
         elif self.merging_strategy.name() == "TopBottomTruncateStrategy":
             sequences = [sequences[0], sequences[-1]]
 
-        # Get embeddings for each subsequence
-        tokens = self._encode(sequences)
-        embeddings = self._compute_batch_embeddings(tokens)
-        embeddings = embeddings.squeeze(1)
+        sub_dna = "".join(sequences)
+        raw_embeddings = self.embed_raw(sub_dna)
+        merged_embedding = self.merging_strategy.merge(sequences, raw_embeddings)
 
-        # Merge the embeddings using the specified strategy
-        merged_embedding = self.merging_strategy.merge(sequences, embeddings)
-
-        # clean_gpu()
+        clean_gpu()
 
         return merged_embedding
 
@@ -82,7 +95,10 @@ class AbstractModel(ABC):
                 batch = tokens[i : i + self.batch_size]
                 embeds = self._compute_single_embedding(batch.to(self.device))
                 outputs.append(embeds.cpu())
+                if i % 10 == 0:
+                    clean_gpu()
 
+        clean_gpu()
         return torch.cat(outputs, dim=0)
 
     # Divide sequence into overlapping subsequences
@@ -116,6 +132,10 @@ class AbstractModel(ABC):
     def is_loaded(self) -> bool:
         """Check if the model is loaded and ready to compute embeddings."""
         return self.load_model
+
+    def raw_name(self) -> str:
+        """Base name identifying the unmerged embedding storage key."""
+        return f"{type(self).__name__}-RAW-ov{self.overlap}-maxlen{self.max_seq_len}"
 
     def name(self) -> str:
         return f"{type(self).__name__}-{self.merging_strategy.name()}"

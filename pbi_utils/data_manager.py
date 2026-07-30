@@ -38,7 +38,7 @@ class EmbeddingsManager(ABC):
 
     @abstractmethod
     def load_embedding(
-        self, id: int, model_name: str, remove: bool = False, device: str = "cpu"
+        self, id: int, model_name: str, remove: bool = False, device: str = "cpu", keep_shape: bool = False
     ) -> torch.Tensor | None:
         """
         Load a single embedding.
@@ -51,6 +51,8 @@ class EmbeddingsManager(ABC):
         :type remove: bool
         :param device: The device to load the embedding onto. Default is "cpu".
         :type device: str
+        :param keep_shape: Whether to preserve original tensor shape (2D for raw chunks). Default is False.
+        :type keep_shape: bool
         :return: The loaded embedding tensor, or None if not found.
         :rtype: Tensor | None
         """
@@ -89,6 +91,7 @@ class EmbeddingsManager(ABC):
         remove: bool = False,
         device: str = "cpu",
         silent: bool = False,
+        keep_shape: bool = False,
     ) -> List[torch.Tensor]:
         """
         Load a batch of embeddings.
@@ -158,13 +161,14 @@ class H5pyEmbeddingsManager(EmbeddingsManager):
         data = embedding.detach().cpu().float().numpy()
 
         with h5py.File(os.path.join(self.base_path, model_name + ".h5"), "a") as f:
-            if not overwrite and id in f:
-                logger.debug(
-                    f"{id} already exists, skipping it. To overwrite the value, use overwrite=True"
-                )
-            else:
-                self.remove_key(id, model_name, ignore_not_found=True)
-                f.create_dataset(id, data=data, compression="gzip")
+            if id in f:
+                if not overwrite:
+                    logger.debug(
+                        f"{id} already exists, skipping it. To overwrite the value, use overwrite=True"
+                    )
+                    return
+                del f[id]
+            f.create_dataset(id, data=data, compression="gzip")
 
     def save_embeddings_batch(
         self,
@@ -203,7 +207,7 @@ class H5pyEmbeddingsManager(EmbeddingsManager):
                     f.create_dataset(id, data=data, compression="gzip")
 
     def load_embedding(
-        self, id: int, model_name: str, remove: bool = False, device: str = "cpu"
+        self, id: int, model_name: str, remove: bool = False, device: str = "cpu", keep_shape: bool = False
     ) -> torch.Tensor | None:
         id = str(id)  # type: ignore
         with h5py.File(os.path.join(self.base_path, model_name + ".h5"), "r") as f:
@@ -211,7 +215,8 @@ class H5pyEmbeddingsManager(EmbeddingsManager):
                 logger.warning(f"{id} not found when loading embedding")
                 embed = None
             else:
-                embed = torch.Tensor(f[id][:]).flatten().to(device=device)  # type: ignore
+                raw_data = torch.from_numpy(f[id][:]).to(device=device)
+                embed = raw_data if keep_shape else raw_data.flatten()
                 if remove:
                     self.remove_key(id, model_name)
 
@@ -224,6 +229,7 @@ class H5pyEmbeddingsManager(EmbeddingsManager):
         remove: bool = False,
         device: str = "cpu",
         silent: bool = False,
+        keep_shape: bool = False,
     ) -> List[torch.Tensor]:
         logger.debug(
             f"Loading {len(ids)} embeddings for model {model_name} from {self.base_path}"
@@ -235,7 +241,8 @@ class H5pyEmbeddingsManager(EmbeddingsManager):
                 if id not in f:
                     logger.warning(f"{id} not found when loading batch")
                 else:
-                    result.append(torch.Tensor(f[id][:]).flatten().to(device=device))  # type: ignore
+                    raw_data = torch.from_numpy(f[id][:]).to(device=device)
+                    result.append(raw_data if keep_shape else raw_data.flatten())
                     if remove:
                         self.remove_key(id, model_name)
         return result

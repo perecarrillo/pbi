@@ -64,8 +64,8 @@ def create_embeddings(
             f"Creating {organism_type} embeddings for model {model.name()}..."
         )
 
-        # Build a temporary series with one embedding per organism row
-        embed_col = f"embedding_{model.name()}"
+        merged_model_name = model.name()
+        raw_model_name = model.raw_name()
         ids = df[id_col].tolist()
         sequences = df[seq_col].tolist()
 
@@ -75,20 +75,72 @@ def create_embeddings(
             total=len(ids),
             desc=f"{organism_type.capitalize()} embeddings ({model.name()})",
         ):
+            # 1. Check if merged embedding already exists
             if compute_flag == "auto" and output_manager.has_key(
-                id=org_id, model_name=model.name()
+                id=org_id, model_name=merged_model_name
             ):
                 logger.trace(
-                    f"Loading cached embedding for {id_col}={org_id}"
+                    f"Loading cached merged embedding for {id_col}={org_id}"
                 )
                 embedding = output_manager.load_embedding(
-                    id=org_id, model_name=model.name(), device=device
+                    id=org_id, model_name=merged_model_name, device=device
                 )
+            # 2. Check if raw unmerged chunk embeddings exist
+            elif compute_flag == "auto" and output_manager.has_key(
+                id=org_id, model_name=raw_model_name
+            ):
+                logger.trace(
+                    f"Loading cached raw chunk embeddings and applying {model.merging_strategy.name()} for {id_col}={org_id}"
+                )
+                raw_embeds = output_manager.load_embedding(
+                    id=org_id, model_name=raw_model_name, device=device, keep_shape=True
+                )
+                seq_chunks = model._split_sequence(sequence)
+                if model.merging_strategy.name() == "TruncateStrategy":
+                    seq_chunks_merged = [seq_chunks[0]]
+                    raw_embeds_merged = raw_embeds[:1]
+                elif model.merging_strategy.name() == "BottomTruncateStrategy":
+                    seq_chunks_merged = [seq_chunks[-1]]
+                    raw_embeds_merged = raw_embeds[-1:]
+                elif model.merging_strategy.name() == "TopBottomTruncateStrategy":
+                    seq_chunks_merged = [seq_chunks[0], seq_chunks[-1]]
+                    raw_embeds_merged = torch.stack([raw_embeds[0], raw_embeds[-1]], dim=0)
+                else:
+                    seq_chunks_merged = seq_chunks
+                    raw_embeds_merged = raw_embeds
+
+                embedding = model.merging_strategy.merge(seq_chunks_merged, raw_embeds_merged)
+                output_manager.save_embedding(
+                    id=org_id, embedding=embedding, model_name=merged_model_name, overwrite=True
+                )
+            # 3. Compute raw chunk embeddings, save raw, merge, and save merged
             else:
                 logger.trace(f"Computing embedding for {id_col}={org_id}")
-                embedding = model.embed(sequence)
+                raw_embeds = model.embed_raw(sequence)
+                output_manager.save_embedding(
+                    id=org_id, embedding=raw_embeds, model_name=raw_model_name, overwrite=True
+                )
+                seq_chunks = model._split_sequence(sequence)
+                if model.merging_strategy.name() == "TruncateStrategy":
+                    seq_chunks_merged = [seq_chunks[0]]
+                    raw_embeds_merged = raw_embeds[:1]
+                elif model.merging_strategy.name() == "BottomTruncateStrategy":
+                    seq_chunks_merged = [seq_chunks[-1]]
+                    raw_embeds_merged = raw_embeds[-1:]
+                elif model.merging_strategy.name() == "TopBottomTruncateStrategy":
+                    seq_chunks_merged = [seq_chunks[0], seq_chunks[-1]]
+                    raw_embeds_merged = torch.stack([raw_embeds[0], raw_embeds[-1]], dim=0)
+                else:
+                    seq_chunks_merged = seq_chunks
+                    raw_embeds_merged = raw_embeds
+
+                embedding = model.merging_strategy.merge(seq_chunks_merged, raw_embeds_merged)
+                output_manager.save_embedding(
+                    id=org_id, embedding=embedding, model_name=merged_model_name, overwrite=True
+                )
+
             embeddings.append(embedding)
 
         output_manager.save_embeddings_batch(
-            ids, embeddings, model_name=model.name(), overwrite=True
+            ids, embeddings, model_name=merged_model_name, overwrite=True
         )

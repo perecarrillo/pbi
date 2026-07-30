@@ -1,0 +1,85 @@
+seed: 42
+
+input_perphect:
+  bacteria_df: data/perphect-data/predphi/bacteria_sequences.csv
+  phages_df: data/perphect-data/predphi/bacteriophages_sequences.csv
+  couples_df: data/perphect-data/predphi/predphi_train_dataset.csv
+
+embeddings_dir: data2/embeddings-pbip
+output_dir: output/pbip/predphi_optimized
+
+num_gpu: 1
+gpu_id: 0
+
+pca_components: 200
+ensemble_size: 10
+reducer_type: PCA
+
+training_config:
+  do_test: true
+  epochs: 100
+  learning_rate: 5.0e-4
+  weight_decay: 1.0e-4
+  batch_size: 256
+  training_noise_std: 0.05
+  stratify_cv: true
+  k_folds_cv: 1
+  lr_schedule: cosine
+  test_split_strategy: predefined
+  test_dataset_path: data/perphect-data/predphi/predphi_test_dataset.csv
+  label_smoothing: 0.0
+  loss_type: focal
+  focal_gamma: 2.0
+  focal_alpha: 0.90
+
+phages_embedding_models:
+  - name: NT2
+    params:
+      model_name: nucleotide-transformer-v2-250m-multi-species
+    strategy: TKPertStrategy
+    use_cached_embeddings: auto
+
+  - name: MegaDNA
+    params:
+      weights_path: data/weights/megaDNA_phage_145M.pt
+      get_layer: concat
+    strategy: TKPertStrategy
+    use_cached_embeddings: auto
+
+  - name: DNABERT2v2
+    params:
+      max_seq_len: 10000
+    strategy: TKPertStrategy
+    use_cached_embeddings: auto
+
+bacteria_embedding_models:
+  - name: NT2
+    params:
+      model_name: nucleotide-transformer-v2-250m-multi-species
+    strategy: TKPertStrategy
+    use_cached_embeddings: auto
+
+  - name: MegaDNA
+    params:
+      weights_path: data/weights/megaDNA_phage_145M.pt
+      get_layer: concat
+    strategy: TKPertStrategy
+    use_cached_embeddings: auto
+
+  - name: DNABERT2v2
+    params:
+      max_seq_len: 10000
+    strategy: TKPertStrategy
+    use_cached_embeddings: auto
+
+kmer_features:
+  k_values: [4]
+
+classifier:
+  name: MLPClassifier
+  params:
+    bacterium_mlp_sizes: [256, 128]
+    phage_mlp_sizes: [256, 128]
+    kmer_mlp_sizes: [128, 64]
+    dense_dim: 256
+    dropout: 0.4
