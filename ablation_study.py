@@ -164,12 +164,149 @@ def get_ensemble_variants(base_config: dict) -> List[Tuple[str, dict]]:
     return res
 
 
+# ---------------------------------------------------------------------------
+# Strategy registry
+# ---------------------------------------------------------------------------
+
+# Each entry: (label, strategy_dict)
+# strategy_dict is a YAML-compatible dict for the ``strategy`` field of a
+# model config.  For strategies with no params we use the short-form string.
+_STRATEGY_VARIANTS: List[Tuple[str, Any]] = [
+    # TKPert
+    ("TKPert-concat-J16",
+     {"name": "TKPertStrategy", "params": {"J": 16, "gamma": 20, "merging_strategy": "concat"}}),
+    # Top-K (Consensus / Centroid - Concatenated)
+    ("TopK-concat-K5",
+     {"name": "TopKStrategy", "params": {"K": 5, "merging_strategy": "concat"}}),
+    ("TopK-concat-K10",
+     {"name": "TopKStrategy", "params": {"K": 10, "merging_strategy": "concat"}}),
+    # Inverse Top-K (Divergent / Unique Chunks - Concatenated)
+    ("InverseTopK-concat-K5",
+     {"name": "InverseTopKStrategy", "params": {"K": 5, "merging_strategy": "concat"}}),
+    ("InverseTopK-concat-K10",
+     {"name": "InverseTopKStrategy", "params": {"K": 10, "merging_strategy": "concat"}}),
+    # Other existing strategies
+    ("Max",
+     "MaxStrategy"),
+    ("TopBottom-Truncate",
+     "TopBottomTruncateStrategy"),
+]
+
+
+def _apply_strategy(model_dict: dict, strategy: Any) -> dict:
+    """Return a copy of *model_dict* with the strategy field replaced."""
+    m = copy.deepcopy(model_dict)
+    m["strategy"] = strategy
+    return m
+
+
+def get_merging_strategy_variants(base_config: dict) -> List[Tuple[str, dict]]:
+    """Generate merging strategy ablation variants.
+
+    Produces variants starting with the baseline configuration, followed by
+    changing 1 model at a time for each strategy:
+
+    **Group 1 – Baseline** (1 variant):
+        The base configuration as-is (e.g. all models using TKPertStrategy).
+
+    **Group 2 – Phage branch only, one model at a time** (n_phage × 7 variants):
+        For each phage model, sweep all alternative strategies.
+        Bacteria models keep whatever strategy the base config specifies.
+
+    **Group 3 – Bacteria branch only, one model at a time** (n_bact × 7 variants):
+        Mirror of Group 2 for the bacteria branch.
+
+    With 3 models per branch: 1 + 21 + 21 = **43 unique variants**.
+    """
+    phage_models = base_config.get("phages_embedding_models", [])
+    bact_models = base_config.get("bacteria_embedding_models", [])
+    n_phage = len(phage_models)
+    n_bact = len(bact_models)
+
+    res: List[Tuple[str, dict]] = []
+    seen_labels: set = set()
+
+    # -------------------------------------------------------------------
+    # Group 1: Baseline configuration
+    # -------------------------------------------------------------------
+    res.append(("Baseline", copy.deepcopy(base_config)))
+    seen_labels.add("Baseline")
+
+    def _make_variant(
+        label: str,
+        strategy: Any,
+        phage_model_idxs: List[int],
+        bact_model_idxs: List[int],
+    ) -> Tuple[str, dict]:
+        """Build one variant config dict.
+
+        Only models at *phage_model_idxs* / *bact_model_idxs* have their
+        strategy replaced; all others keep the base config value.
+        """
+        cfg = copy.deepcopy(base_config)
+
+        for idx in phage_model_idxs:
+            if idx < len(cfg.get("phages_embedding_models", [])):
+                cfg["phages_embedding_models"][idx] = _apply_strategy(
+                    cfg["phages_embedding_models"][idx], strategy
+                )
+        for idx in bact_model_idxs:
+            if idx < len(cfg.get("bacteria_embedding_models", [])):
+                cfg["bacteria_embedding_models"][idx] = _apply_strategy(
+                    cfg["bacteria_embedding_models"][idx], strategy
+                )
+
+        return label, cfg
+
+    # -------------------------------------------------------------------
+    # Group 2: phage branch only, one model at a time
+    # -------------------------------------------------------------------
+    for model_idx in range(n_phage):
+        model_name = phage_models[model_idx].get("name", f"phage_model{model_idx}")
+        for strat_label, strategy in _STRATEGY_VARIANTS:
+            full_label = f"Phage/{model_name}:{strat_label}"
+            if full_label in seen_labels:
+                continue
+            seen_labels.add(full_label)
+            res.append(
+                _make_variant(
+                    full_label,
+                    strategy,
+                    phage_model_idxs=[model_idx],
+                    bact_model_idxs=[],        # bacteria: keep base config
+                )
+            )
+
+    # -------------------------------------------------------------------
+    # Group 3: bacteria branch only, one model at a time
+    # -------------------------------------------------------------------
+    for model_idx in range(n_bact):
+        model_name = bact_models[model_idx].get("name", f"bact_model{model_idx}")
+        for strat_label, strategy in _STRATEGY_VARIANTS:
+            full_label = f"Bact/{model_name}:{strat_label}"
+            if full_label in seen_labels:
+                continue
+            seen_labels.add(full_label)
+            res.append(
+                _make_variant(
+                    full_label,
+                    strategy,
+                    phage_model_idxs=[],        # phage: keep base config
+                    bact_model_idxs=[model_idx],
+                )
+            )
+
+    return res
+
+
+
 EXPERIMENT_MAP = {
     "embeddings_phage": get_phage_embedding_subsets,
     "embeddings_bacteria": get_bacteria_embedding_subsets,
     "kmer": get_kmer_variants,
     "reducer": get_reducer_variants,
     "ensemble": get_ensemble_variants,
+    "merging_strategy": get_merging_strategy_variants,
 }
 
 
@@ -237,6 +374,12 @@ def main():
         default=42,
         help="Base seed for repetitions (rep i uses seed + i)",
     )
+    parser.add_argument(
+        "--start_variant",
+        type=int,
+        default=1,
+        help="1-based index of the first variant to run (use to resume after a crash).",
+    )
 
     args = parser.parse_args()
 
@@ -251,18 +394,58 @@ def main():
     print(f"\n{'='*80}")
     print(f"STARTING ABLATION EXPERIMENT: {args.experiment.upper()}")
     print(f"Base Config: {args.base_config}")
-    print(f"Variants Count: {len(variants)}")
+    print(f"Total Variants: {len(variants)}")
+    if args.start_variant > 1:
+        print(f"Resuming from variant {args.start_variant}/{len(variants)}")
     print(f"Repetitions per variant: {args.n_reps}")
     print(f"Output Directory: {args.output_dir}")
     print(f"{'='*80}\n")
 
-    summary_rows = []
-    raw_results = {}
+    csv_path = os.path.join(args.output_dir, f"{args.experiment}_results.csv")
+    json_path = os.path.join(args.output_dir, f"{args.experiment}_raw.json")
+
+    # ------------------------------------------------------------------
+    # Resume support: load any already-completed variants from disk so
+    # we can skip them and still include them in the final summary.
+    # ------------------------------------------------------------------
+    completed_labels: set = set()
+    summary_rows: List[dict] = []
+    raw_results: Dict[str, Any] = {}
+
+    if os.path.exists(csv_path):
+        try:
+            df_existing = pd.read_csv(csv_path)
+            for _, r in df_existing.iterrows():
+                completed_labels.add(r["Variant"])
+                summary_rows.append(r.to_dict())
+            print(f"[Resume] Found {len(completed_labels)} already-completed variant(s) in {csv_path}")
+        except Exception as exc:
+            print(f"[Resume] Could not read existing CSV ({exc}); starting fresh.")
+
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r") as f:
+                raw_results = json.load(f)
+        except Exception as exc:
+            print(f"[Resume] Could not read existing JSON ({exc}); raw results will start fresh.")
+
+    # Variants to actually run (skip already done, then apply --start_variant offset)
+    pending_variants = [
+        (label, cfg) for label, cfg in variants
+        if label not in completed_labels
+    ]
+    pending_variants = pending_variants[args.start_variant - 1:]
+
+    skipped = len(variants) - len(pending_variants) - (args.start_variant - 1)
+    if skipped > 0 or args.start_variant > 1:
+        remaining = len(pending_variants)
+        print(f"[Resume] Skipping {len(variants) - remaining} variant(s); {remaining} remaining.\n")
 
     metrics_keys = ["accuracy", "precision", "recall", "specificity", "f1", "mcc"]
 
-    for var_idx, (label, cfg_dict) in enumerate(variants, 1):
-        print(f"--- Variant [{var_idx}/{len(variants)}]: {label} ---")
+    for var_idx, (label, cfg_dict) in enumerate(pending_variants, 1):
+        global_idx = len(completed_labels) + (args.start_variant - 1) + var_idx
+        print(f"--- Variant [{global_idx}/{len(variants)}]: {label} ---")
         rep_metrics: Dict[str, List[float]] = {m: [] for m in metrics_keys}
         rep_times: List[float] = []
 
@@ -303,15 +486,20 @@ def main():
         summary_rows.append(row)
         print()
 
-    # Save outputs
+        # ---------------------------------------------------------------
+        # Incremental save: flush CSV and JSON after every variant so a
+        # future crash can resume from where we left off.
+        # ---------------------------------------------------------------
+        df_summary = pd.DataFrame(summary_rows)
+        df_summary.to_csv(csv_path, index=False)
+
+        with open(json_path, "w") as f:
+            json.dump(raw_results, f, indent=2)
+
+        print(f"  [Saved] {csv_path}")
+
+    # Final summary print (includes previously-completed variants)
     df_summary = pd.DataFrame(summary_rows)
-
-    csv_path = os.path.join(args.output_dir, f"{args.experiment}_results.csv")
-    json_path = os.path.join(args.output_dir, f"{args.experiment}_raw.json")
-
-    df_summary.to_csv(csv_path, index=False)
-    with open(json_path, "w") as f:
-        json.dump(raw_results, f, indent=2)
 
     print(f"{'='*80}")
     print(f"ABLATION EXPERIMENT {args.experiment.upper()} COMPLETE")
