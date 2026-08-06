@@ -6,13 +6,13 @@ input_perphect:
   couples_df: data/perphect-data/predphi/predphi_train_dataset.csv
 
 embeddings_dir: data2/embeddings-pbip
-output_dir: output/pbip/predphi_optimized
+output_dir: output/pbip/test
 
 num_gpu: 1
 gpu_id: 0
 
 pca_components: 200
-ensemble_size: 10
+ensemble_size: 5
 reducer_type: PCA
 
 training_config:
@@ -27,6 +27,9 @@ training_config:
   lr_schedule: cosine
   test_split_strategy: predefined
   test_dataset_path: data/perphect-data/predphi/predphi_test_dataset.csv
+  # test_dataset_path: data/perphect-data/private_data_set/couples_df.csv
+  # test_split_strategy: bacteria
+  # n_holdout_test: 50
   label_smoothing: 0.0
   loss_type: focal
   focal_gamma: 2.0
@@ -36,41 +39,54 @@ phages_embedding_models:
   - name: NT2
     params:
       model_name: nucleotide-transformer-v2-250m-multi-species
-    strategy: TKPertStrategy
-    use_cached_embeddings: auto
+    strategy: MaxStrategy
+    use_cached_embeddings: True
 
   - name: MegaDNA
     params:
       weights_path: data/weights/megaDNA_phage_145M.pt
       get_layer: concat
-    strategy: TKPertStrategy
-    use_cached_embeddings: auto
+    strategy: MaxStrategy
+    use_cached_embeddings: True
 
   - name: DNABERT2v2
     params:
       max_seq_len: 10000
-    strategy: TKPertStrategy
-    use_cached_embeddings: auto
+    strategy:
+      name: TopKStrategy
+      params:
+        K: 5
+        merging_strategy: concat
+    use_cached_embeddings: True
 
 bacteria_embedding_models:
   - name: NT2
     params:
       model_name: nucleotide-transformer-v2-250m-multi-species
-    strategy: TKPertStrategy
-    use_cached_embeddings: auto
+    strategy: MaxStrategy
+    use_cached_embeddings: True
 
   - name: MegaDNA
     params:
       weights_path: data/weights/megaDNA_phage_145M.pt
       get_layer: concat
-    strategy: TKPertStrategy
-    use_cached_embeddings: auto
+    strategy:
+      name: TKPertStrategy
+      params:
+        J: 16
+        gamma: 20
+        merging_strategy: concat
+    use_cached_embeddings: True
 
   - name: DNABERT2v2
     params:
       max_seq_len: 10000
-    strategy: TKPertStrategy
-    use_cached_embeddings: auto
+    strategy:
+      name: TopKStrategy
+      params:
+        K: 10
+        merging_strategy: concat
+    use_cached_embeddings: True
 
 kmer_features:
   k_values: [4]

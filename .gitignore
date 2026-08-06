@@ -223,3 +223,7 @@ finetuning/datasets/
 output/
 
 DNABERT-2-117M/
+
+gridsearch_output*
+data2/
+ablation*output*

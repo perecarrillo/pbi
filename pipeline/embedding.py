@@ -3,6 +3,7 @@ Embedding creation function for bacteria and phages.
 """
 
 from typing import List, Literal
+import torch
 import pandas as pd
 from tqdm import tqdm
 
