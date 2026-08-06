@@ -66,8 +66,11 @@ class DNABERT2(AbstractModel):
 
     def _encode(self, dna_sequence: list[str]) -> torch.Tensor:
         return self.tokenizer.batch_encode_plus(
-            dna_sequence, return_tensors="pt", padding=True
-        )["input_ids"].to(self.device)
+            dna_sequence, return_tensors="pt", padding=True, truncation=True, max_length=8192
+        )["input_ids"]
+
+    def raw_name(self) -> str:
+        return f"DNABERT2-RAW-ov{self.overlap}-maxlen{self.max_seq_len}"
 
     def name(self) -> str:
         return f"DNABERT2-{self.merging_strategy.name()}-ov{self.overlap}-maxlen{self.max_seq_len}"

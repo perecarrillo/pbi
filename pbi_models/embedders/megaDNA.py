@@ -103,8 +103,10 @@ class MegaDNA(AbstractModel):
 
         return torch.tensor(
             [self.__vocabulary(nt) for nt in dna_sequence] + [self.__vocabulary("#")],
-            device=self.device,
         ).unsqueeze(dim=0)
+
+    def raw_name(self) -> str:
+        return f"MegaDNA-RAW-{self.get_layer}-ov{self.overlap}-maxlen{self.max_seq_len}"
 
     def name(self) -> str:
         return (

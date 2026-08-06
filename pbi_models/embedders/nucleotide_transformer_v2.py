@@ -133,8 +133,12 @@ class NT2(AbstractModel):
         # tokens_ids = self.tokenizer.batch_encode_plus(dna_sequence, return_tensors="pt", padding=True, truncation=True)["input_ids"].to("cpu") # Keep on CPU for OOM reasons, will be moved to device later
         tokens_ids = self.tokenizer.batch_encode_plus(
             dna_sequence, return_tensors="pt", padding=True, truncation=True
-        )["input_ids"].to(self.device)
+        )["input_ids"]
         return tokens_ids
+
+    def raw_name(self) -> str:
+        short_name = self.model_name2short_name[self.model_name] if self.model_name in self.model_name2short_name else ''.join([x for x in self.model_name if x in (string.ascii_letters + '0123456789')])
+        return f"NT2-RAW-{short_name}-ov{self.overlap}-maxlen{self.max_seq_len}"
 
     def name(self) -> str:
         return f"NT2-{self.merging_strategy.name()}-{self.model_name2short_name[self.model_name] if self.model_name in self.model_name2short_name else ''.join([x for x in self.model_name if x in (string.ascii_letters + '0123456789')])}-ov{self.overlap}"
