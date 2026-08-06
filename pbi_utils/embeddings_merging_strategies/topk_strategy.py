@@ -8,16 +8,7 @@ import torch.nn.functional as F
 
 class TopKStrategy(AbstractMergerStrategy):
     """
-    Merge embeddings by keeping only the K chunks most similar to the mean
-    chunk embedding (cosine similarity), then averaging or concatenating those K chunks.
-
-    Intuition: subsequences that deviate strongly from the centroid of the
-    genome may be noisy or low-quality; keeping only the most *representative*
-    ones acts as an unsupervised quality filter.
-
-    When a sequence has fewer than K chunks, all chunks are used and padded/repeated
-    if merging_strategy is "concat" to guarantee a consistent output dimension of
-    ``[1, K * dim]``.
+    Merge embeddings by keeping only the K chunks most similar to the mean chunk embedding (cosine similarity), then averaging or concatenating those K chunks.
 
     :param K: Number of top chunks to keep.
     :type K: int
@@ -38,32 +29,32 @@ class TopKStrategy(AbstractMergerStrategy):
 
     def merge(self, sentences: list[str], embeddings: torch.Tensor) -> torch.Tensor:
         """
-        :param sentences: List of DNA sub-sequences (not used for scoring).
+        :param sentences: List of DNA sub-sequences.
         :param embeddings: Tensor of shape ``[N, dim]``.
-        :return: Merged embedding of shape ``[1, K * dim]`` (concat) or ``[1, dim]`` (avg).
+        :return: Merged embedding.
         """
         n = embeddings.shape[0]
         k = min(self.K, n)
 
         # Compute mean chunk embedding and cosine similarities
-        mean_embed = embeddings.mean(dim=0, keepdim=True)  # [1, dim]
+        mean_embed = embeddings.mean(dim=0, keepdim=True) # [1, dim]
         # Normalize both
-        norm_embeds = F.normalize(embeddings, dim=1)          # [N, dim]
-        norm_mean = F.normalize(mean_embed, dim=1)            # [1, dim]
-        similarities = (norm_embeds * norm_mean).sum(dim=1)   # [N]
+        norm_embeds = F.normalize(embeddings, dim=1) # [N, dim]
+        norm_mean = F.normalize(mean_embed, dim=1) # [1, dim]
+        similarities = (norm_embeds * norm_mean).sum(dim=1) # [N]
 
-        # Select top-K indices (most similar to centroid)
-        topk_idx = torch.topk(similarities, k=k, largest=True).indices  # [k]
-        selected = embeddings[topk_idx]                                 # [k, dim]
+        # Select top-K indices
+        topk_idx = torch.topk(similarities, k=k, largest=True).indices # [k]
+        selected = embeddings[topk_idx] # [k, dim]
 
         if self.merging_strategy == "concat":
             # If fewer than K chunks, pad by repeating selected chunks up to K
             if k < self.K:
                 repeat_factor = (self.K + k - 1) // k
-                selected = selected.repeat(repeat_factor, 1)[: self.K]          # [K, dim]
-            return selected.reshape(1, -1)                                      # [1, K * dim]
+                selected = selected.repeat(repeat_factor, 1)[: self.K] # [K, dim]
+            return selected.reshape(1, -1) # [1, K * dim]
         else:
-            return selected.mean(dim=0, keepdim=True)                           # [1, dim]
+            return selected.mean(dim=0, keepdim=True) # [1, dim]
 
     def name(self) -> str:
         if self.merging_strategy == "concat":
