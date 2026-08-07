@@ -94,29 +94,39 @@ class MLPClassifier(AbstractNNClassifier):
         self.kmer_mlp_sizes = kmer_mlp_sizes
 
         # Branches
-        self.bacteria_branch = BranchMLP(
-            bacterium_mlp_sizes, bacterium_embed_dim, float(dropout)
-        )
-        self.phage_branch = BranchMLP(phage_mlp_sizes, phage_embed_dim, float(dropout))
+        if bacterium_embed_dim > 0:
+            self.bacteria_branch = BranchMLP(
+                bacterium_mlp_sizes, bacterium_embed_dim, float(dropout)
+            )
+            bacterium_flat_size = (
+                bacterium_mlp_sizes[-1]
+                if len(bacterium_mlp_sizes) > 0
+                else bacterium_embed_dim
+            )
+        else:
+            self.bacteria_branch = None
+            bacterium_flat_size = 0
+
+        if phage_embed_dim > 0:
+            self.phage_branch = BranchMLP(phage_mlp_sizes, phage_embed_dim, float(dropout))
+            phage_flat_size = (
+                phage_mlp_sizes[-1] if len(phage_mlp_sizes) > 0 else phage_embed_dim
+            )
+        else:
+            self.phage_branch = None
+            phage_flat_size = 0
+
         if kmer_dim > 0:
             self.kmer_branch = BranchMLP(kmer_mlp_sizes, kmer_dim, float(dropout))
+            kmer_flat_size = (
+                (kmer_mlp_sizes[-1] if len(kmer_mlp_sizes) > 0 else kmer_dim)
+                if kmer_dim > 0
+                else 0
+            )
         else:
             self.kmer_branch = None
+            kmer_flat_size = 0
 
-        # Compute flattened size
-        bacterium_flat_size = (
-            bacterium_mlp_sizes[-1]
-            if len(bacterium_mlp_sizes) > 0
-            else bacterium_embed_dim
-        )
-        phage_flat_size = (
-            phage_mlp_sizes[-1] if len(phage_mlp_sizes) > 0 else phage_embed_dim
-        )
-        kmer_flat_size = (
-            (kmer_mlp_sizes[-1] if len(kmer_mlp_sizes) > 0 else kmer_dim)
-            if kmer_dim > 0
-            else 0
-        )
         concat_dim = bacterium_flat_size + phage_flat_size + kmer_flat_size
 
         # Dense layers
@@ -194,19 +204,18 @@ class MLPClassifier(AbstractNNClassifier):
             logits: [batch, num_classes]
         """
 
-        # Branch processing
-        x_b = self.bacteria_branch(bacterium_emb)
-        x_p = self.phage_branch(phage_emb)
-
-        # Flatten & concatenate
-        x_b = torch.flatten(x_b, start_dim=1)
-        x_p = torch.flatten(x_p, start_dim=1)
+        branches = []
+        if self.bacteria_branch is not None:
+            x_b = torch.flatten(self.bacteria_branch(bacterium_emb), start_dim=1)
+            branches.append(x_b)
+        if self.phage_branch is not None:
+            x_p = torch.flatten(self.phage_branch(phage_emb), start_dim=1)
+            branches.append(x_p)
         if self.kmer_branch is not None and kmer_emb is not None:
-            x_k = self.kmer_branch(kmer_emb)
-            x_k = torch.flatten(x_k, start_dim=1)
-            x = torch.cat((x_b, x_p, x_k), dim=1)
-        else:
-            x = torch.cat((x_b, x_p), dim=1)
+            x_k = torch.flatten(self.kmer_branch(kmer_emb), start_dim=1)
+            branches.append(x_k)
+
+        x = torch.cat(branches, dim=1)
 
         # Dense layers
         x = F.relu(self.fc1(x))

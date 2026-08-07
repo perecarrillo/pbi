@@ -441,13 +441,13 @@ def run_full_pipeline(config: Config) -> None:
         with open(stats_path, "w") as f:
             f.write(
                 "Date\tCommand\tDescription\tBacteria embedder\tPhages embedder\t"
-                "Classifier\tEpochs\tBS\tLR\tEnsemble size\tSplit strategy\tThreshold\t"
-                "Train Elapsed time (s)\t"
-                "Train True Positive\tTrain False Positive\tTrain False Negative\t"
-                "Train True Negative\tTrain Accuracy\tTrain Recall\t"
-                "Train F1 Score\tTest Elapsed time (s)\tTest True Positive\t"
-                "Test False Positive\tTest False Negative\tTest True Negative\t"
-                "Test Accuracy\tTest Recall\tTest F1 Score"
+                "Classifier\tEpochs\tBS\tLR\tWD\tTraining Noise\tEnsemble Size\t"
+                "Elapsed time (s)\t"
+                "True Positive\tFalse Positive\tFalse Negative\tTrue Negative\t"
+                "Accuracy\tWeighted Accuracy\tPrecision\tRecall\tF1 Score\tMCC\t"
+                "Elapsed time (s)\t"
+                "True Positive\tFalse Positive\tFalse Negative\tTrue Negative\t"
+                "Accuracy\tWeighted Accuracy\tPrecision\tRecall\tSpecificity\tF1 Score\tMCC"
             )
             stats.log(lambda msg: f.write(msg + "\n"))
         logger.info(f"Run stats saved to: {stats_path}")

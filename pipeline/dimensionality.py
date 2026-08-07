@@ -6,6 +6,8 @@ from typing import Tuple, Any
 import numpy as np
 import pandas as pd
 import torch
+import matplotlib
+matplotlib.use("Agg")  # avoids tkinter threading crashes
 from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 
@@ -61,33 +63,48 @@ def fit_pca(
     n_components_phag: int | None,
     output_dir: str | None = None,
     random_state: int = 42,
-) -> Tuple[PCA, PCA]:
-    pca_bact = PCA(random_state=random_state, n_components=n_components_bact)
-    pca_phag = PCA(random_state=random_state, n_components=n_components_phag)
+) -> Tuple[PCA | None, PCA | None]:
+    bact_dim = len(dataset["bacterium_embedding"].iloc[0]) if len(dataset) > 0 else 0
+    phag_dim = len(dataset["phage_embedding"].iloc[0]) if len(dataset) > 0 else 0
 
-    pca_bact.fit(_embeddings_to_numpy(dataset["bacterium_embedding"]))
-    pca_phag.fit(_embeddings_to_numpy(dataset["phage_embedding"]))
+    pca_bact = (
+        PCA(random_state=random_state, n_components=n_components_bact)
+        if (bact_dim > 0 and n_components_bact is not None)
+        else None
+    )
+    pca_phag = (
+        PCA(random_state=random_state, n_components=n_components_phag)
+        if (phag_dim > 0 and n_components_phag is not None)
+        else None
+    )
+
+    if pca_bact is not None:
+        pca_bact.fit(_embeddings_to_numpy(dataset["bacterium_embedding"]))
+    if pca_phag is not None:
+        pca_phag.fit(_embeddings_to_numpy(dataset["phage_embedding"]))
 
     if output_dir is not None:
         os.makedirs(output_dir, exist_ok=True)
-        _plot_explained_variance(
-            pca_bact.explained_variance_ratio_,
-            os.path.join(output_dir, "pca_explained_variance_bacterium.png"),
-            "PCA Explained Variance (Bacterium Embedding)",
-        )
-        _plot_explained_variance(
-            pca_phag.explained_variance_ratio_,
-            os.path.join(output_dir, "pca_explained_variance_phage.png"),
-            "PCA Explained Variance (Phage Embedding)",
-        )
+        if pca_bact is not None:
+            _plot_explained_variance(
+                pca_bact.explained_variance_ratio_,
+                os.path.join(output_dir, "pca_explained_variance_bacterium.png"),
+                "PCA Explained Variance (Bacterium Embedding)",
+            )
+        if pca_phag is not None:
+            _plot_explained_variance(
+                pca_phag.explained_variance_ratio_,
+                os.path.join(output_dir, "pca_explained_variance_phage.png"),
+                "PCA Explained Variance (Phage Embedding)",
+            )
 
     return pca_bact, pca_phag
 
 
 def transform_pca(
     dataset: pd.DataFrame,
-    pca_bact: PCA,
-    pca_phag: PCA,
+    pca_bact: PCA | None,
+    pca_phag: PCA | None,
 ) -> pd.DataFrame:
     """
     Apply *fitted* PCA objects to the embeddings in *dataset* (in-place copy).
@@ -97,27 +114,26 @@ def transform_pca(
 
     :param dataset: DataFrame with ``bacterium_embedding`` and ``phage_embedding``
         columns containing torch tensors.
-    :param pca_bact: Fitted PCA for bacteria embeddings.
-    :param pca_phag: Fitted PCA for phage embeddings.
+    :param pca_bact: Fitted PCA for bacteria embeddings (or None).
+    :param pca_phag: Fitted PCA for phage embeddings (or None).
     :return: New DataFrame with reduced-dimensionality embeddings.
     """
     result = dataset.copy()
 
-    result["bacterium_embedding"] = _numpy_to_tensor_list(
-        pca_bact.transform(_embeddings_to_numpy(result["bacterium_embedding"]))
-    )
-    result["phage_embedding"] = _numpy_to_tensor_list(
-        pca_phag.transform(_embeddings_to_numpy(result["phage_embedding"]))
-    )
+    if pca_bact is not None:
+        result["bacterium_embedding"] = _numpy_to_tensor_list(
+            pca_bact.transform(_embeddings_to_numpy(result["bacterium_embedding"]))
+        )
+    if pca_phag is not None:
+        result["phage_embedding"] = _numpy_to_tensor_list(
+            pca_phag.transform(_embeddings_to_numpy(result["phage_embedding"]))
+        )
 
-    logger.debug(
-        f"Embedding size after PCA (bacteria): "
-        f"{len(result['bacterium_embedding'].iloc[0])}"
-    )
-    logger.debug(
-        f"Embedding size after PCA (phages): "
-        f"{len(result['phage_embedding'].iloc[0])}"
-    )
+    bact_dim = len(result["bacterium_embedding"].iloc[0]) if len(result) > 0 else 0
+    phage_dim = len(result["phage_embedding"].iloc[0]) if len(result) > 0 else 0
+
+    logger.debug(f"Embedding size after PCA (bacteria): {bact_dim}")
+    logger.debug(f"Embedding size after PCA (phages): {phage_dim}")
 
     return result
 

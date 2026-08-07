@@ -56,37 +56,45 @@ def make_dataset(
     logger.info("Creating dataset (loading embeddings)...")
 
     # Load and concatenate all bacteria embeddings
-    bacteria_embeddings = [
-        output_manager.load_embedding_batch(
-            result["bacterium_id"].tolist(),
-            model_name=model_name,
-            device=device,
+    if bacteria_model_names:
+        bacteria_embeddings = [
+            output_manager.load_embedding_batch(
+                result["bacterium_id"].tolist(),
+                model_name=model_name,
+                device=device,
+            )
+            for model_name in bacteria_model_names
+        ]
+        result["bacterium_embedding"] = pd.Series(
+            [torch.cat(embeds) for embeds in zip(*bacteria_embeddings)]
         )
-        for model_name in bacteria_model_names
-    ]
-    result["bacterium_embedding"] = pd.Series(
-        [torch.cat(embeds) for embeds in zip(*bacteria_embeddings)]
-    )
+    else:
+        result["bacterium_embedding"] = pd.Series(
+            [torch.empty(0, device=device) for _ in range(len(result))]
+        )
 
     # Load and concatenate all phage embeddings
-    phage_embeddings = [
-        output_manager.load_embedding_batch(
-            result["phage_id"].tolist(),
-            model_name=model_name,
-            device=device,
+    if phages_model_names:
+        phage_embeddings = [
+            output_manager.load_embedding_batch(
+                result["phage_id"].tolist(),
+                model_name=model_name,
+                device=device,
+            )
+            for model_name in phages_model_names
+        ]
+        result["phage_embedding"] = pd.Series(
+            [torch.cat(embeds) for embeds in zip(*phage_embeddings)]
         )
-        for model_name in phages_model_names
-    ]
-    result["phage_embedding"] = pd.Series(
-        [torch.cat(embeds) for embeds in zip(*phage_embeddings)]
-    )
+    else:
+        result["phage_embedding"] = pd.Series(
+            [torch.empty(0, device=device) for _ in range(len(result))]
+        )
 
-    logger.debug(
-        f"Final embedding size (bacteria): {len(result['bacterium_embedding'].iloc[0])}"
-    )
-    logger.debug(
-        f"Final embedding size (phages): {len(result['phage_embedding'].iloc[0])}"
-    )
+    bact_dim = len(result["bacterium_embedding"].iloc[0]) if len(result) > 0 else 0
+    phage_dim = len(result["phage_embedding"].iloc[0]) if len(result) > 0 else 0
+    logger.debug(f"Final embedding size (bacteria): {bact_dim}")
+    logger.debug(f"Final embedding size (phages): {phage_dim}")
 
     if kmer_config is not None and kmer_config.k_values:
         if bacteria_df is None or phages_df is None:
