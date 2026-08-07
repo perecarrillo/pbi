@@ -116,8 +116,7 @@ training_config:
 # ---------------------------------------------------------------------------
 
 phages_embedding_models:
-  # List of models to embed phage sequences. Multiple models have their
-  # embeddings concatenated into one final embedding.
+  # List of models to embed phage sequences. Multiple models have their embeddings concatenated into one final embedding.
   #
   # Fields per model:
   #   name (str): Class name in pbi_models.embedders (e.g. NT2, MegaDNA, DNABERT2).
