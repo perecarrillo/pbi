@@ -5,14 +5,14 @@ input_perphect:
   phages_df: data/perphect-data/predphi/bacteriophages_sequences.csv
   couples_df: data/perphect-data/predphi/predphi_train_dataset.csv
 
-embeddings_dir: data2/embeddings-pbip
-output_dir: output/pbip/test
+embeddings_dir: data2/embeddings
+output_dir: output/v2/predphi_train_test
 
 num_gpu: 1
 gpu_id: 0
 
 pca_components: 200
-ensemble_size: 5
+ensemble_size: 10
 reducer_type: PCA
 
 training_config:
@@ -27,7 +27,7 @@ training_config:
   lr_schedule: cosine
   test_split_strategy: predefined
   test_dataset_path: data/perphect-data/predphi/predphi_test_dataset.csv
-  # test_dataset_path: data/perphect-data/private_data_set/couples_df.csv
+  # test_dataset_path: data/perphect-data/all/couples_df.csv
   # test_split_strategy: bacteria
   # n_holdout_test: 50
   label_smoothing: 0.0
