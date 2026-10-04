@@ -105,28 +105,45 @@ def make_dataset(
         bact_col = "bacterium_sequence"
         phage_col = "phage_sequence"
 
-        bact_map = (
-            bacteria_df.set_index("bacterium_id")[bact_col].to_dict()
-            if "bacterium_id" in bacteria_df.columns and bact_col in bacteria_df.columns
-            else {}
-        )
-        phage_map = (
-            phages_df.set_index("phage_id")[phage_col].to_dict()
-            if "phage_id" in phages_df.columns and phage_col in phages_df.columns
-            else {}
-        )
+        bact_map = {}
+        if "bacterium_id" in bacteria_df.columns and bact_col in bacteria_df.columns:
+            for b_id, seq in zip(bacteria_df["bacterium_id"], bacteria_df[bact_col]):
+                if pd.notna(seq):
+                    bact_map[b_id] = seq
+                    bact_map[str(b_id)] = seq
+
+        phage_map = {}
+        if "phage_id" in phages_df.columns and phage_col in phages_df.columns:
+            for p_id, seq in zip(phages_df["phage_id"], phages_df[phage_col]):
+                if pd.notna(seq):
+                    phage_map[p_id] = seq
+                    phage_map[str(p_id)] = seq
 
         bact_cache = {}
+        missing_bact = 0
         for b_id in result["bacterium_id"].unique():
-            seq = str(bact_map.get(b_id, "")) if pd.notna(bact_map.get(b_id, "")) else ""
-            feats = compute_kmer_features(seq, kmer_config.k_values)
+            seq = bact_map.get(b_id) if b_id in bact_map else bact_map.get(str(b_id), "")
+            if not seq:
+                missing_bact += 1
+            feats = compute_kmer_features(str(seq), kmer_config.k_values)
             bact_cache[b_id] = torch.tensor(feats, dtype=torch.float32, device=device)
+        if missing_bact > 0:
+            logger.warning(
+                f"Missing sequences for {missing_bact}/{len(result['bacterium_id'].unique())} bacteria when computing k-mer features"
+            )
 
         phage_cache = {}
+        missing_phage = 0
         for p_id in result["phage_id"].unique():
-            seq = str(phage_map.get(p_id, "")) if pd.notna(phage_map.get(p_id, "")) else ""
-            feats = compute_kmer_features(seq, kmer_config.k_values)
+            seq = phage_map.get(p_id) if p_id in phage_map else phage_map.get(str(p_id), "")
+            if not seq:
+                missing_phage += 1
+            feats = compute_kmer_features(str(seq), kmer_config.k_values)
             phage_cache[p_id] = torch.tensor(feats, dtype=torch.float32, device=device)
+        if missing_phage > 0:
+            logger.warning(
+                f"Missing sequences for {missing_phage}/{len(result['phage_id'].unique())} phages when computing k-mer features"
+            )
 
         kmer_embeds = [
             torch.cat([bact_cache[b_id], phage_cache[p_id]], dim=0)
