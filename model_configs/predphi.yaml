@@ -5,7 +5,7 @@ input_perphect:
   phages_df: data/perphect-data/predphi/bacteriophages_sequences.csv
   couples_df: data/perphect-data/predphi/predphi_train_dataset.csv
 
-embeddings_dir: data2/embeddings
+embeddings_dir: data/embeddings
 output_dir: output/v2/predphi_train_test
 
 num_gpu: 1
